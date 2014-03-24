@@ -1,0 +1,91 @@
+#!/bin/bash
+#
+# Author: Miroslav Vadkerti <miro.vadkerti at mogdesign.eu>
+#
+
+# globals
+SYSTEM_CONFIG="/etc/myctl.conf"
+USER_CONFIG="$HOME/.myctl.conf"
+COMMAND=$1
+
+#
+# helpers
+#
+exit_error() {
+  echo "Error: $@"
+  exit -1
+}
+
+#
+# general functions
+#
+sanity_checks() {
+  [ -z "$ADMIN_USER" ] && exit_error "No admin user in configuration"
+  [ -z "$ADMIN_PASSWORD" ] && exit_error "No admin password in configuration"
+
+  # check admin account requirements
+}
+
+load_config() {
+  # load config from home directory
+  if [ -e "$USER_CONFIG" ]; then
+    source $USER_CONFIG
+  # load system-wide config
+  elif [ -e "$SYSTEM_CONFIG" ]; then
+    source $SYSTEM_CONFIG
+  else
+    echo "No configuration file found. Please create $USER_CONFIG"
+    echo "or $SYSTEM_CONFIG file with at least these variables:"
+    echo
+    echo "# mysql administrator username and password"
+    echo "ADMIN_USER=username"
+    echo "ADMIN_PASSWORD=password"
+    echo
+    echo "Refer to program help for more information"
+    exit 0
+  fi
+}
+
+show_user_help() {
+  echo "Usage: $0 user [options] name"
+}
+
+show_help() {
+  echo "Usage: $0 command [options]"
+  echo
+  echo "MySQL command line tool for managing users, databases and displaying"
+  echo "various useful information."
+  echo
+  echo "Available commands:"
+  echo " user        List and manage users"
+  echo
+  echo "Pass -h to the command to get detailed help."
+  exit 0
+}
+
+#
+# user command
+#
+command_user() {
+  echo "TODO"
+
+  exit 0
+}
+
+#
+# main
+#
+
+# load configuration
+load_config
+
+# sanity checks
+sanity_checks
+
+# execute give command specific function
+[ "$(type -t command_$COMMAND)" = function ] && command_$COMMAND
+
+# show help if no command found
+show_help
+
+# vim: ai:ts=2:sw=2
