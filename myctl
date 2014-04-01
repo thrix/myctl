@@ -4,9 +4,15 @@
 #
 
 # globals
-SYSTEM_CONFIG="/etc/myctl.conf"
-USER_CONFIG="$HOME/.myctl.conf"
+VERSION="0.1 (Dark Hawk)"
+TOOLNAME=${0#./}
+SYSTEM_CONFIG="/etc/$TOOLNAME.conf"
+USER_CONFIG="$HOME/.$TOOLNAME.conf"
 COMMAND=$1
+SUBCOMMAND=$2
+
+MYSQL_HOST="localhost"
+MYSQL_PORT="3306"
 
 #
 # helpers
@@ -20,8 +26,11 @@ exit_error() {
 # general functions
 #
 sanity_checks() {
-  [ -z "$ADMIN_USER" ] && exit_error "No admin user in configuration"
-  [ -z "$ADMIN_PASSWORD" ] && exit_error "No admin password in configuration"
+  # check mandatory config
+  [ -z "$MYSQL_USER" ] && exit_error "No admin user in configuration"
+  [ -z "$MYSQL_PASSWORD" ] && exit_error "No admin password in configuration"
+
+  # check mysql connection
 
   # check admin account requirements
 }
@@ -38,43 +47,164 @@ load_config() {
     echo "or $SYSTEM_CONFIG file with at least these variables:"
     echo
     echo "# mysql administrator username and password"
-    echo "ADMIN_USER=username"
-    echo "ADMIN_PASSWORD=password"
+    echo "MYSQL_USER=username"
+    echo "MYSQL_PASSWORD=password"
     echo
     echo "Refer to program help for more information"
     exit 0
   fi
 }
 
-show_user_help() {
-  echo "Usage: $0 user [options] name"
-}
 
 show_help() {
-  echo "Usage: $0 command [options]"
+  echo "Usage: $TOOLNAME command [sub-command] [options]"
   echo
   echo "MySQL command line tool for managing users, databases and displaying"
-  echo "various useful information."
+  echo "various useful information from MySQL database."
+  echo
+  echo "Run command without parameters to get detailed help."
   echo
   echo "Available commands:"
-  echo " user        List and manage users"
+  echo " user        Manage and list users"
   echo
-  echo "Pass -h to the command to get detailed help."
+  echo "Configuration file:"
+  echo " The configuration file provides basic configuration for $TOOLNAME tool."
+  echo " Global configuration file is located at \`$SYSTEM_CONFIG'. This can be"
+  echo " overriden by local configuration file \`~/.myctl.conf'. Configuration file"
+  echo " contains bash varibles sourced by the tool."
+  echo
+  echo " Mandatory variables:"
+  echo " MYSQL_USER      - MySQL administrator username" 
+  echo " MYSQL_PASSWORD  - MySQL administrator password" 
+  echo
+  echo " Optional variables:"
+  echo " MYSQL_HOST      - MySQL hostname (default: localhost)" 
+  echo " MYSQL_PORT      - MySQL port (default: 3309)" 
+  echo " DEF_PASSWORD    - Default password for added user" 
+  echo
   exit 0
 }
 
 #
-# user command
+# user management
 #
+
+## add user
+command_user_add() {
+
+
+
+  exit 0
+}
+
+user_add_help() {
+  echo "Usage: $TOOLNAME add [-p password] [-d database] [-f dump] name"
+  echo
+  echo "Add new MySQL user. Optionally add also a new database for the user restore"
+  echo "database contents from given dump. "
+  echo
+  echo "Options:"
+  echo " -p password       Use given password for user \
+(default: ${DEF_PASSWORD:-none, ask for password}"
+
+  exit 0
+}
+
+## delete user
+command_user_del() {
+  echo "Delete user"
+
+  exit 0
+}
+
+## list users
+command_user_list() {
+  while getopts "h" arg; do
+    case $arg in
+      h)
+        user_list_help
+        ;;
+      *)
+        exit -1
+        ;;
+    esac
+  done
+
+  # get all users
+  local SQL="SELECT User from mysql.user"
+  USERS=$(mysql -u$MYSQL_USER -p$MYSQL_PASSWORD -h$MYSQL_HOST \
+    -P$MYSQL_PORT --skip-column-names <<< "$SQL")
+
+  # for all users print 
+
+  exit 0
+}
+
+user_list_help() {
+  echo "Usage: $TOOLNAME user list"
+  echo
+  echo "List available mysql users with accessible databases."
+
+  exit 0
+}
+
 command_user() {
-  echo "TODO"
+  echo "Usage: $TOOLNAME user [sub-command] [options]"
+  echo
+  echo "Available sub-commands:"
+  echo "  add     Add new user"
+  echo "  del     Delete user"
+  echo "  list    List users with available databases"
+  echo
+  echo "Run sub-command with -h parameter to get detailed help."
+  echo
+  exit 0
+}
+
+#
+# shell
+#
+command_shell() {
+  while getopts "h" arg; do
+    case $arg in
+      h)
+        shell_help
+        ;;
+      *)
+        exit -1
+        ;;
+    esac
+  done
+
+  # run the shell
+  if [ -z "$SUBCOMMAND" ]; then
+    mysql -u$MYSQL_USER -p$MYSQL_PASSWORD -h$MYSQL_HOST -P$MYSQL_PORT
+  else
+    echo $@ | mysql -u$MYSQL_USER -p$MYSQL_PASSWORD -h$MYSQL_HOST -P$MYSQL_PORT | less
+  fi
+
+  exit $?
+}
+
+shell_help() {
+  echo "Usage: $TOOLNAME shell"
+  echo
+  echo "Get an administrator MySQL shell."
+  echo
 
   exit 0
 }
+
 
 #
 # main
 #
+
+# early help
+{ [[ "$COMMAND" =~ (-h|--help) ]] || [ -z "$COMMAND" ]; } && show_help 
+
+# version
+[[ "$COMMAND" =~ (-v|--version) ]] && { echo "Version: $VERSION"; exit 0; }
 
 # load configuration
 load_config
@@ -82,10 +212,13 @@ load_config
 # sanity checks
 sanity_checks
 
+# shift away command and sub-command
+shift 2
+
 # execute give command specific function
-[ "$(type -t command_$COMMAND)" = function ] && command_$COMMAND
+[ "$(type -t command_${COMMAND}_${SUBCOMMAND})" = function ] && command_${COMMAND}_${SUBCOMMAND} $@
+[ "$(type -t command_${COMMAND})" = function ] && command_$COMMAND $SUBCOMMAND $@
 
-# show help if no command found
-show_help
+exit_error "uknown command $COMMAND"
 
-# vim: ai:ts=2:sw=2
+# vim: ai ts=2 sw=2 et
