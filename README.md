@@ -27,7 +27,26 @@ contains bash varibles sourced by the tool.
  DEF_PASSWORD    - Default password for added user
 ```
 
-#### Examples:
+### Usage:
+
+#### Listing database users
+The `user list` command displays all database users with all their
+databases. Actual privileges of users are ignored currently.
+
+```
+myctl user list
+```
+
+If you supply another parameter after the list command, this will
+be used for egrep on the user list.
+
+So for example to list all users starting with wp_ you would use
+
+```
+myctl user list 'wp_.*@'
+```
+
+#### Commands not working yet
 ```
 # add user dbuser with default user password
 myctl user add dbuser
@@ -37,9 +56,6 @@ myctl user add -p "secretSauce##" dbuser
 
 # add user dbuser with default password and database sampledb
 myctl user add -d sampledb dbuser
-
-# list users
-myctl user list
 
 * run mysql shell
 myctl shell

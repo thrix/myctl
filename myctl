@@ -11,8 +11,10 @@ USER_CONFIG="$HOME/.$TOOLNAME.conf"
 COMMAND=$1
 SUBCOMMAND=$2
 
+# defaults
 MYSQL_HOST="localhost"
 MYSQL_PORT="3306"
+DEF_HOST="localhost"
 
 #
 # helpers
@@ -80,7 +82,8 @@ show_help() {
   echo " Optional variables:"
   echo " MYSQL_HOST      - MySQL hostname (default: localhost)" 
   echo " MYSQL_PORT      - MySQL port (default: 3309)" 
-  echo " DEF_PASSWORD    - Default password for added user" 
+  echo " DEF_HOST        - Default host to add user (default: localhost)"
+  echo " DEF_PASSWORD    - Default password for added user"
   echo
   exit 0
 }
@@ -98,7 +101,7 @@ command_user_add() {
 }
 
 user_add_help() {
-  echo "Usage: $TOOLNAME add [-p password] [-d database] [-f dump] name"
+  echo "Usage: $TOOLNAME add [-d database] [-f dump] [-h host] [-p password] name"
   echo
   echo "Add new MySQL user. Optionally add also a new database for the user restore"
   echo "database contents from given dump. "
@@ -130,12 +133,27 @@ command_user_list() {
     esac
   done
 
-  # get all users
-  local SQL="SELECT User from mysql.user"
-  USERS=$(mysql -u$MYSQL_USER -p$MYSQL_PASSWORD -h$MYSQL_HOST \
-    -P$MYSQL_PORT --skip-column-names <<< "$SQL")
+  {
+    printf "%-40s%s\n" "User@Host" "Database"
+    printf "%80s\n" | tr ' ' -
 
-  # for all users print 
+    # get all users
+    # local SQL="SELECT User from mysql.user"
+    local SQL="SELECT DISTINCT user, host FROM mysql.db"
+    USERS_HOSTS=$(mysql -u$MYSQL_USER -p$MYSQL_PASSWORD -h$MYSQL_HOST \
+      -P$MYSQL_PORT --skip-column-names <<< "$SQL")
+
+    # for all users, hosts print their databases
+    while read USER_HOST; do
+      read USER HOST <<< "$USER_HOST"
+      [ -z "$USER" -o -z "$HOST" ] && continue
+      SQL="SELECT db FROM mysql.db WHERE user='$USER' AND host='$HOST'"
+      DBS=$(mysql -u$MYSQL_USER -p$MYSQL_PASSWORD -h$MYSQL_HOST \
+          -P$MYSQL_PORT --skip-column-names <<< "$SQL")
+      printf "%-40s" "$USER@$HOST"
+      echo $DBS
+    done <<< "$USERS_HOSTS" | sort | egrep "$1"
+  } | less -F
 
   exit 0
 }
