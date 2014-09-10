@@ -4,7 +4,7 @@
 #
 
 # globals
-VERSION="0.1 (Dark Hawk)"
+VERSION="0.2 (Dark Hawk)"
 TOOLNAME=${0#./}
 SYSTEM_CONFIG="/etc/$TOOLNAME.conf"
 USER_CONFIG="$HOME/.$TOOLNAME.conf"
@@ -19,9 +19,55 @@ DEF_HOST="localhost"
 #
 # helpers
 #
-exit_error() {
+print_info() {
+  echo ":: $@"
+}
+
+print_error() {
   echo "Error: $@"
-  exit -1
+}
+
+exit_error() {
+  print_error "$@"
+  exit 1
+}
+
+mysql_exec() {
+  if [ -z "$1" ]; then
+    mysql -u$MYSQL_USER -p$MYSQL_PASSWD -h$MYSQL_HOST \
+      -P$MYSQL_PORT --skip-column-names
+  else
+    mysql -u$MYSQL_USER -p$MYSQL_PASSWD -h$MYSQL_HOST \
+      -P$MYSQL_PORT --skip-column-names <<< "$@"
+  fi
+}
+
+ask_user() {
+  local INP=
+
+  echo -n "$2: "
+  read INP
+
+  eval $1="$INP"
+}
+
+confirm() {
+  local INP=
+
+  [ -n "$CONFIRM" ] && return
+
+  echo -n "$1 (y/n)? "
+
+  read INP
+
+  case $INP in
+    y|Y)
+      return
+      ;;
+    *)
+      echo "Cancelled!"
+      exit 1
+  esac
 }
 
 #
@@ -29,8 +75,8 @@ exit_error() {
 #
 sanity_checks() {
   # check mandatory config
-  [ -z "$MYSQL_USER" ] && exit_error "No admin user in configuration"
-  [ -z "$MYSQL_PASSWORD" ] && exit_error "No admin password in configuration"
+  [ -z "$MYSQL_USER" ] && exit_error "No MySQL admin user in configuration"
+  [ -z "$MYSQL_PASSWD" ] && exit_error "No MySQL admin password in configuration"
 
   # check mysql connection
 
@@ -38,19 +84,23 @@ sanity_checks() {
 }
 
 load_config() {
+  # load system-wide config
+  if [ -e "$SYSTEM_CONFIG" ]; then
+    source $SYSTEM_CONFIG
+  fi
+
   # load config from home directory
   if [ -e "$USER_CONFIG" ]; then
     source $USER_CONFIG
-  # load system-wide config
-  elif [ -e "$SYSTEM_CONFIG" ]; then
-    source $SYSTEM_CONFIG
-  else
+  fi
+
+  if [ ! -e "$USER_CONFIG" -a ! -e "$SYSTEM_CONFIG" ]; then
     echo "No configuration file found. Please create $USER_CONFIG"
     echo "or $SYSTEM_CONFIG file with at least these variables:"
     echo
     echo "# mysql administrator username and password"
-    echo "MYSQL_USER=username"
-    echo "MYSQL_PASSWORD=password"
+    echo "MYSQL_USR=username"
+    echo "MYSQL_PASSWD=password"
     echo
     echo "Refer to program help for more information"
     exit 0
@@ -77,13 +127,13 @@ show_help() {
   echo
   echo " Mandatory variables:"
   echo " MYSQL_USER      - MySQL administrator username" 
-  echo " MYSQL_PASSWORD  - MySQL administrator password" 
+  echo " MYSQL_PASSWD  - MySQL administrator password" 
   echo
   echo " Optional variables:"
   echo " MYSQL_HOST      - MySQL hostname (default: localhost)" 
   echo " MYSQL_PORT      - MySQL port (default: 3309)" 
   echo " DEF_HOST        - Default host to add user (default: localhost)"
-  echo " DEF_PASSWORD    - Default password for added user"
+  echo " DEF_PASSWD    - Default password for added user"
   echo
   exit 0
 }
@@ -94,74 +144,216 @@ show_help() {
 
 ## add user
 command_user_add() {
+  local OPTIND= DB= DUMP= PASSWD= UNAME=
+  local PASSWD=$DEF_PASSWD
+  local OPTS="hd:f:H:p:"
 
+  while getopts $OPTS arg; do
+    case $arg in
+      h)
+        user_add_help
+        ;;
+      d)
+        DB=$OPTARG
+        ;;
+      f)
+        DUMP=$OPTARG
+        ;;
+      p)
+        PASSWD=$OPTARG
+        ;;
+      *)
+        exit 1
+        ;;
+    esac
+  done
 
+  shift $(($OPTIND-1))
 
-  exit 0
+  [ -z "$1" ] && exit_error "No username given"
+  [ $# -ne 1 ] && exit_error "Too many parameters"
+  [ -n "$DUMP" -a -z "$DB" ] && exit_error "No database given. Option -f requires -d"
+
+  IFS=@ read UNAME HOST <<< "$1"
+  [ -z "$HOST" ] && HOST=$DEF_HOST
+
+  # check if user already exists
+  command_user_list "$UNAME@$HOST" &> /dev/null && \
+    exit_error "User $UNAME@$HOST already exists"
+
+  # check if database already exists
+  mysql_exec "show databases;" | egrep -q "^$DB$" && exit_error \
+    "Database $DB already exists, cannot create"
+
+  # check if 
+
+  while [ -z "$PASSWD" ]; do
+    ask_user PASSWD "Enter $UNAME@$HOST password"
+  done
+
+  # add user
+  SQL="CREATE USER '$UNAME'@'$HOST' IDENTIFIED BY '$PASSWD';"
+  mysql_exec "$SQL" || exit_error "Addin user failed"
+  print_info "Added user $UNAME@$HOST with password $PASSWD"
+
+  # add database
+  if [ -n "$DB" ]; then
+    SQL="CREATE DATABASE $DB"
+    mysql_exec "$SQL" || exit_error "Creating database"
+    print_info "Created database $DB"
+    SQL="GRANT ALL ON $DB.* TO '$UNAME'@'$HOST';"
+    mysql_exec "$SQL" || exit_error "Granting all privileges to database $DB"
+    print_info "Granted all privileges for $UNAME@$HOST to $DB"
+  fi
+
+  if [ -n "$DUMP" ]; then
+    file "$DUMP" | grep -q "gzip" && gzip < $DUMP || cat $DUMP | \
+      mysql -u$MYSQL_USER -p$MYSQL_PASSWD -h$MYSQL_HOST $DB || exit_error \
+        "Restoring dump $DUMP to $DB - unsupported format or corrupted file"
+    print_info "Restored MySQL dump $DUMP to database $DB"
+  fi
 }
 
 user_add_help() {
-  echo "Usage: $TOOLNAME add [-d database] [-f dump] [-h host] [-p password] name"
+  echo "Usage: $TOOLNAME add [-d database] [-f dump] [-H host] [-p password] user[@host]"
   echo
-  echo "Add new MySQL user. Optionally add also a new database for the user restore"
-  echo "database contents from given dump. "
+  echo "Add new MySQL user who can connect from $DEF_HOST. Optionally specify other host, "
+  echo "add also a new database and restore a MySQL dump from file."
   echo
   echo "Options:"
+  echo " -d database       Create a user database with given name"
+  echo " -f dump           Restore given dump to the database, requires -d"
+  echo " -H host           Host user can authenticate from (default: $DEF_HOST)"
   echo " -p password       Use given password for user \
-(default: ${DEF_PASSWORD:-none, ask for password}"
+(default: ${DEF_PASSWD:-none, ask for password}"
+  echo
 
   exit 0
 }
 
 ## delete user
 command_user_del() {
-  echo "Delete user"
+  local OPTIND= DBS= DALL=
+  local OPTS="hDd:"
+
+  while getopts $OPTS arg; do
+    case $arg in
+      h)
+        user_del_help
+        ;;
+      d)
+        DBS=$OPTARG
+        ;;
+      D)
+        DALL=yes
+        ;;
+      *)
+        exit 1
+        ;;
+    esac
+  done
+
+  shift $(($OPTIND-1))
+
+  [ -z "$1" ] && exit_error "No username given"
+  [ -n "$DBS" -a -n "$DALL" ] && exit_error \
+    "Only one option for removing databases can be specified"
+
+  IFS=@ read UNAME HOST <<< "$1"
+  [ -z "$HOST" ] && HOST=$DEF_HOST
+
+  # check if user already exists
+  command_user_list "$UNAME@$HOST" &> /dev/null || \
+    exit_error "User $UNAME@$HOST does not exits"
+
+  # ask for confirmation
+  confirm "Really remove MySQL user $UNAME@$HOST"
+
+  # delete user
+  SQL="DROP USER '$UNAME'@'$HOST';"
+  mysql_exec "$SQL" || exit_error "Addin user failed"
+  print_info "User $UNAME@$HOST removed"
+
+  exit 0
+}
+
+user_del_help() {
+  echo "Usage: $TOOLNAME del [-D] [-d db,..] user[@host]"
+  echo
+  echo "Add new MySQL user who can connect from $DEF_HOST. Optionally specify other host, "
+  echo "add also a new database and restore a MySQL dump from file."
+  echo
+  echo "Options:"
+  echo " -D                Remove all databases user has access to"
+  echo " -d db,..          Remove one or more databases separated with a comma"
+  echo
 
   exit 0
 }
 
 ## list users
 command_user_list() {
-  while getopts "h" arg; do
+  local SQL= DATA= USER_HOST_DB= USR= HOST= DB= USRPREV= HOSTPREV= LIST=
+  local FIRST= OPTIND=
+  local OPTS="h"
+
+  while getopts $OPTS arg; do
     case $arg in
       h)
         user_list_help
         ;;
       *)
-        exit -1
+        exit 1
         ;;
     esac
   done
 
-  {
-    printf "%-40s%s\n" "User@Host" "Database"
-    printf "%80s\n" | tr ' ' -
-
+  LIST=$(
     # get all users
-    # local SQL="SELECT User from mysql.user"
-    local SQL="SELECT DISTINCT user, host FROM mysql.db"
-    USERS_HOSTS=$(mysql -u$MYSQL_USER -p$MYSQL_PASSWORD -h$MYSQL_HOST \
-      -P$MYSQL_PORT --skip-column-names <<< "$SQL")
+    SQL="use mysql; SELECT DISTINCT user.user, user.host, db.db FROM user \
+      left JOIN db ON user.user=db.user ORDER BY user, host, db"
+    DATA=$(mysql_exec "$SQL")
 
     # for all users, hosts print their databases
-    while read USER_HOST; do
-      read USER HOST <<< "$USER_HOST"
-      [ -z "$USER" -o -z "$HOST" ] && continue
-      SQL="SELECT db FROM mysql.db WHERE user='$USER' AND host='$HOST'"
-      DBS=$(mysql -u$MYSQL_USER -p$MYSQL_PASSWORD -h$MYSQL_HOST \
-          -P$MYSQL_PORT --skip-column-names <<< "$SQL")
-      printf "%-40s" "$USER@$HOST"
-      echo $DBS
-    done <<< "$USERS_HOSTS" | sort | egrep "$1"
-  } | less -F
+    while read USER_HOST_DB; do
+      read USR HOST DB <<< "$USER_HOST_DB"
+      [ "$DB" = "NULL" ] && DB="(none)"
+      if [ "$USR" = "$USRPREV" -a "$HOST" = "$HOSTPREV" ]; then
+        echo -n "$DB "
+        continue
+      fi
 
-  exit 0
+      [ -z "$FIRST" ] && printf "%-40s%s" "$USR@$HOST" "$DB" || \
+        printf "\n%-40s%s" "$USR@$HOST" "$DB "
+
+      USRPREV=$USR
+      HOSTPREV=$HOST
+      FIRST="no"
+    done <<< "$DATA" | sort | egrep "$1"
+  )
+
+  if [ -z "$LIST" ]; then
+    echo "No data found"
+    return 1
+  fi
+
+  {
+    printf "%-40s%s\n" "User@Host" "Privileges to database(s)"
+    printf "%80s\n" | tr ' ' -
+    echo "$LIST"
+  } | less -F
 }
 
 user_list_help() {
-  echo "Usage: $TOOLNAME user list"
+  echo "Usage: $TOOLNAME user list [regexp]"
   echo
-  echo "List available mysql users with accessible databases."
+  echo "List available mysql users with privilages to databases."
+  echo "Currently the privileges are not distinguished."
+  echo
+  echo "Optionally a regexp can be passwd to filter out results."
+  echo "This regexp is passwd to egrep directly."
+  echo
+  echo "Listed results are paged via less -F."
 
   exit 0
 }
@@ -176,6 +368,7 @@ command_user() {
   echo
   echo "Run sub-command with -h parameter to get detailed help."
   echo
+
   exit 0
 }
 
@@ -183,25 +376,23 @@ command_user() {
 # shell
 #
 command_shell() {
-  while getopts "h" arg; do
+  local OPTS="h"
+
+  while getopts $OPTS arg; do
     case $arg in
       h)
         shell_help
         ;;
       *)
-        exit -1
+        exit 1
         ;;
     esac
   done
 
   # run the shell
-  if [ -z "$SUBCOMMAND" ]; then
-    mysql -u$MYSQL_USER -p$MYSQL_PASSWORD -h$MYSQL_HOST -P$MYSQL_PORT
-  else
-    echo $@ | mysql -u$MYSQL_USER -p$MYSQL_PASSWORD -h$MYSQL_HOST -P$MYSQL_PORT | less
-  fi
+  [ -z "$SUBCOMMAND" ] && mysql_exec || mysql_exec "$@"
 
-  exit $?
+  return $?
 }
 
 shell_help() {
@@ -221,6 +412,14 @@ shell_help() {
 # early help
 { [[ "$COMMAND" =~ (-h|--help) ]] || [ -z "$COMMAND" ]; } && show_help 
 
+# answer yes
+if [ "$COMMAND" = "-y" ]; then
+  CONFIRM=yes
+  shift
+  COMMAND=$1
+  SUBCOMMAND=$2
+fi
+
 # version
 [[ "$COMMAND" =~ (-v|--version) ]] && { echo "Version: $VERSION"; exit 0; }
 
@@ -234,8 +433,13 @@ sanity_checks
 shift 2
 
 # execute give command specific function
-[ "$(type -t command_${COMMAND}_${SUBCOMMAND})" = function ] && command_${COMMAND}_${SUBCOMMAND} $@
-[ "$(type -t command_${COMMAND})" = function ] && command_$COMMAND $SUBCOMMAND $@
+if [ "$(type -t command_${COMMAND}_${SUBCOMMAND})" = function ]; then 
+  command_${COMMAND}_${SUBCOMMAND} $@
+  exit $?
+elif [ "$(type -t command_${COMMAND})" = function ]; then
+  command_$COMMAND $SUBCOMMAND $@
+  exit $?
+fi
 
 exit_error "uknown command $COMMAND"
 
