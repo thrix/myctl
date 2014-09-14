@@ -207,7 +207,7 @@ command_user_add() {
   fi
 
   if [ -n "$DUMP" ]; then
-    file "$DUMP" | grep -q "gzip" && gzip < $DUMP || cat $DUMP | \
+    { file "$DUMP" | grep -q "gzip" && gunzip < $DUMP || cat $DUMP; } | \
       mysql -u$MYSQL_USER -p$MYSQL_PASSWD -h$MYSQL_HOST $DB || exit_error \
         "Restoring dump $DUMP to $DB - unsupported format or corrupted file"
     print_info "Restored MySQL dump $DUMP to database $DB"
@@ -215,7 +215,7 @@ command_user_add() {
 }
 
 user_add_help() {
-  echo "Usage: $TOOLNAME add [-d database] [-f dump] [-H host] [-p password] user[@host]"
+  echo "Usage: $TOOLNAME user add [-d database] [-f dump] [-H host] [-p password] user[@host]"
   echo
   echo "Add new MySQL user who can connect from $DEF_HOST. Optionally specify other host, "
   echo "add also a new database and restore a MySQL dump from file."
@@ -225,7 +225,7 @@ user_add_help() {
   echo " -f dump           Restore given dump to the database, requires -d"
   echo " -H host           Host user can authenticate from (default: $DEF_HOST)"
   echo " -p password       Use given password for user \
-(default: ${DEF_PASSWD:-none, ask for password}"
+(default: ${DEF_PASSWD:-none, ask for password})"
   echo
 
   exit 0
@@ -233,7 +233,7 @@ user_add_help() {
 
 ## delete user
 command_user_del() {
-  local OPTIND= DBS= DALL=
+  local OPTIND= DBS= DALL= UNAME= HOST= DB=
   local OPTS="hDd:"
 
   while getopts $OPTS arg; do
@@ -263,25 +263,39 @@ command_user_del() {
   [ -z "$HOST" ] && HOST=$DEF_HOST
 
   # check if user already exists
-  command_user_list "$UNAME@$HOST" &> /dev/null || \
+  command_user_list "\b$UNAME@$HOST\b" &> /dev/null || \
     exit_error "User $UNAME@$HOST does not exits"
+
+  # check if any databases exists
+  [ -n "$DALL" ] && command_user_list "$UNAME@$HOST" | grep -q "(none)" && \
+    exit_error "No database exists for $UNAME@$HOST"
+
+  # check if given databases exist for user
+  if [ -n "$DBS" ]; then
+    IFS=','
+    for DB in $DBS; do
+      command_user_list "\b$UNAME@$HOST\b[[:space:]]+$DB" &>/dev/null || \
+        exit_error "Database $DB not found for $UNAME@$HOST"
+    done
+    unset IFS
+  fi
 
   # ask for confirmation
   confirm "Really remove MySQL user $UNAME@$HOST"
 
   # delete user
   SQL="DROP USER '$UNAME'@'$HOST';"
-  mysql_exec "$SQL" || exit_error "Addin user failed"
+  mysql_exec "$SQL" || exit_error "Adding user failed"
   print_info "User $UNAME@$HOST removed"
 
   exit 0
 }
 
 user_del_help() {
-  echo "Usage: $TOOLNAME del [-D] [-d db,..] user[@host]"
+  echo "Usage: $TOOLNAME user del [-D] [-d db,..] user[@host]"
   echo
-  echo "Add new MySQL user who can connect from $DEF_HOST. Optionally specify other host, "
-  echo "add also a new database and restore a MySQL dump from file."
+  echo "Remove given MySQL user connecting from $DEF_HOST. Optionally specify other host. "
+  echo "Optionally remove all or given associated databases."
   echo
   echo "Options:"
   echo " -D                Remove all databases user has access to"
@@ -358,6 +372,7 @@ user_list_help() {
   exit 0
 }
 
+## user command help
 command_user() {
   echo "Usage: $TOOLNAME user [sub-command] [options]"
   echo
@@ -373,8 +388,105 @@ command_user() {
 }
 
 #
+# database management
+#
+
+## list all databases
+command_db_list() {
+  local DBS=$(command_shell "show databases" | sort | egrep "$1")
+
+  if [ -z "$DBS" ]; then
+    echo "No database found"
+    return 1
+  fi
+
+  {
+    echo "Database"
+    printf "%40s\n" | tr ' ' -
+    echo "$DBS"
+  } | less -F
+}
+
+db_list_help() {
+  echo "Usage: $TOOLNAME user list [regexp]"
+  echo
+  echo "List available MySQL databases."
+  echo
+  echo "Optionally a regexp can be passwd to filter out results."
+  echo "This regexp is passwd to egrep directly."
+  echo
+  echo "Listed results are paged via less -F."
+
+  exit 0
+}
+
+## remove database
+command_db_del() {
+  local DB=$1
+
+  # sanity
+  [ -z "$DB" ] && exit_error "No database given for removal"
+
+  # check if DB exists
+  command_db_list | egrep -q "^$DB$" || exit_error "Database $DB does not exist"
+
+  # confirm removal
+  confirm "Really remove MySQL database $DB"
+
+  # remove database
+  command_shell "DROP DATABASE $DB"
+  print_info "Database $DB removed"
+}
+
+db_del_help() {
+  echo "Usage: $TOOLNAME db del database"
+  echo
+  echo "Remove given MySQL database."
+  echo
+
+  exit 0
+}
+
+## add database
+db_add() {
+  local DB=$1
+
+  # check if DB exists
+
+  # add database
+}
+
+db_add_help() {
+  echo "Usage: $TOOLNAME db del database"
+  echo
+  echo "Remove given MySQL database."
+  echo
+
+  exit 0
+}
+
+## db command help
+command_db() {
+  echo "Usage: $TOOLNAME db [sub-command] [options]"
+  echo
+  echo "MySQL database management."
+  echo
+  echo "Available sub-commands:"
+  echo "  add     Add new database"
+  echo "  del     Delete database"
+  echo "  list    List databases"
+  echo
+  echo "Run sub-command with -h parameter to get detailed help."
+  echo
+
+  exit 0
+}
+
+
+#
 # shell
 #
+
 command_shell() {
   local OPTS="h"
 
@@ -441,6 +553,6 @@ elif [ "$(type -t command_${COMMAND})" = function ]; then
   exit $?
 fi
 
-exit_error "uknown command $COMMAND"
+exit_error "unknown command $COMMAND"
 
 # vim: ai ts=2 sw=2 et
