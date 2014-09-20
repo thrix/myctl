@@ -1,7 +1,7 @@
-# MySQL command line tool
+# myctl - MySQL command line tool
 
-MySQL command line tool for managing users, databases and displaying
-various useful information from MySQL database.
+MySQL command line tool for managing users, databases, database
+privileges and displaying useful information from MySQL database.
 
 
 ### Installation:
@@ -11,27 +11,29 @@ TODO
 
 The configuration file provides basic configuration for myctl tool.
 Global configuration file is located at `/etc/myctl.conf`. This can be
-overriden by local configuration file `~/.myctl.conf`. Configuration file
-contains bash varibles sourced by the tool.
+overriden by local configuration file `~/.myctl.conf`. Configuration files
+are consisted from bash variables.
 
 #### Mandatory variables:
 ```
  MYSQL_USER      - MySQL administrator username
- MYSQL_PASSWORD  - MySQL administrator password
+ MYSQL_PASSWD    - MySQL administrator password
 ```
 
 #### Optional variables:
 ```
  MYSQL_HOST      - MySQL hostname (default: localhost)
- MYSQL_PORT      - MySQL port (default: 3309
- DEF_PASSWORD    - Default password for added user
+ MYSQL_PORT      - MySQL port (default: 3309)
+ DEF_PASSWD      - Default password for added user, myctl will ask
+                   for password if not set
 ```
 
 ### Usage:
 
 #### Listing database users
-The `user list` command displays all database users with all their
-databases. Actual privileges of users are ignored currently.
+The `user list` command displays all database users with users
+who have some privileges to it. Privileges are currently not
+distinguished.
 
 ```
 myctl user list
@@ -46,17 +48,41 @@ So for example to list all users starting with wp_ you would use
 myctl user list 'wp_.*@'
 ```
 
-#### Commands not working yet
+#### Adding user
+To add user dbuser with default user password (set in DEF_PASSWD).
+
 ```
-# add user dbuser with default user password
 myctl user add dbuser
+```
 
-# add user dbuser with password secretSauce##
+To add user dbuser with password 'secretSauce##'.
+```
 myctl user add -p "secretSauce##" dbuser
+```
 
-# add user dbuser with default password and database sampledb
+To add user dbuser with default password and add create a database
+sampledb with all privileges for the created user.
+```
 myctl user add -d sampledb dbuser
+```
 
-* run mysql shell
+To add user dbuser with default password and add create a database
+sampledb with all privileges for the created user, restore dump
+from file sqldump to the created database.
+```
+myctl user add -d sampledb -f sqldump dbuser
+```
+
+#### Get MySQL shell or run SQL query
+With the `shell` subcommand you can get an admin MySQL shell.
+
+```
 myctl shell
+```
+
+You can also execute any SQL statement you like, optionally
+in a context of a given database (-d option).
+```
+# run a SELECT query on database sampledb
+myctl shell -d sampledb 'SELECT * from sampletable'
 ```
