@@ -4,7 +4,7 @@
 #
 
 # globals
-VERSION="0.2 (Dark Hawk)"
+VERSION="0.3 (Dark Hawk)"
 TOOLNAME=${0#./}
 SYSTEM_CONFIG="/etc/$TOOLNAME.conf"
 USER_CONFIG="$HOME/.$TOOLNAME.conf"
@@ -117,7 +117,11 @@ show_help() {
   echo "Run command without parameters to get detailed help."
   echo
   echo "Available commands:"
+  echo " db          Manage and list databases"
+  echo " dump        Create MySQL dump"
+  echo " shell       Get MySQL shell or execute SQL statement"
   echo " user        Manage and list users"
+  echo
   echo
   echo "Configuration file:"
   echo " The configuration file provides basic configuration for $TOOLNAME tool."
@@ -173,6 +177,8 @@ command_user_add() {
   [ -z "$1" ] && exit_error "No username given"
   [ $# -ne 1 ] && exit_error "Too many parameters"
   [ -n "$DUMP" -a -z "$DB" ] && exit_error "No database given. Option -f requires -d"
+  [ -n "$DUMP" -a ! -e "$DUMP" ] && exit_error "Dump file '$DUMP' not found"
+  [ -n "$DUMP" -a -e "$DUMP" ] || exit_error "Dump $DUMP does not exist"
 
   IFS=@ read UNAME HOST <<< "$1"
   [ -z "$HOST" ] && HOST=$DEF_HOST
@@ -188,29 +194,24 @@ command_user_add() {
   # check if 
 
   while [ -z "$PASSWD" ]; do
-    ask_user PASSWD "Enter $UNAME@$HOST password"
+    ask_user PASSWD "Enter '$UNAME@$HOST' password"
   done
 
   # add user
   SQL="CREATE USER '$UNAME'@'$HOST' IDENTIFIED BY '$PASSWD';"
   mysql_exec "$SQL" || exit_error "Addin user failed"
-  print_info "Added user $UNAME@$HOST with password $PASSWD"
+  print_info "Created user '$UNAME@$HOST' with password $PASSWD"
 
   # add database
   if [ -n "$DB" ]; then
-    SQL="CREATE DATABASE $DB"
-    mysql_exec "$SQL" || exit_error "Creating database"
-    print_info "Created database $DB"
-    SQL="GRANT ALL ON $DB.* TO '$UNAME'@'$HOST';"
-    mysql_exec "$SQL" || exit_error "Granting all privileges to database $DB"
-    print_info "Granted all privileges for $UNAME@$HOST to $DB"
+    command_db_add -u "$UNAME@$HOST" $DB
   fi
 
   if [ -n "$DUMP" ]; then
     { file "$DUMP" | grep -q "gzip" && gunzip < $DUMP || cat $DUMP; } | \
       mysql -u$MYSQL_USER -p$MYSQL_PASSWD -h$MYSQL_HOST $DB || exit_error \
         "Restoring dump $DUMP to $DB - unsupported format or corrupted file"
-    print_info "Restored MySQL dump $DUMP to database $DB"
+    print_info "Restored MySQL dump '$DUMP' to database '$DB'"
   fi
 }
 
@@ -359,15 +360,15 @@ command_user_list() {
 }
 
 user_list_help() {
-  echo "Usage: $TOOLNAME user list [regexp]"
+  echo "Usage: $TOOLNAME user list [REGEXP]"
   echo
   echo "List available mysql users with privilages to databases."
   echo "Currently the privileges are not distinguished."
   echo
-  echo "Optionally a regexp can be passwd to filter out results."
-  echo "This regexp is passwd to egrep directly."
+  echo "Optionally a regular expressoin can be passwd to filter out results."
+  echo "This REGEXP is passed to egrep directly."
   echo
-  echo "Listed results are paged via less -F."
+  echo "Listed results are paged via less."
 
   exit 0
 }
@@ -408,24 +409,42 @@ command_db_list() {
 }
 
 db_list_help() {
-  echo "Usage: $TOOLNAME user list [regexp]"
+  echo "Usage: $TOOLNAME db list [REGEXP]"
   echo
   echo "List available MySQL databases."
   echo
-  echo "Optionally a regexp can be passwd to filter out results."
-  echo "This regexp is passwd to egrep directly."
+  echo "Optionally a regular expression can be passed to filter out results."
+  echo "This REGEXP is passwd to egrep directly."
   echo
-  echo "Listed results are paged via less -F."
+  echo "Listed results are paged via less."
+  echo
 
   exit 0
 }
 
 ## remove database
 command_db_del() {
+  local OPTS="h"
+
+  while getopts $OPTS arg; do
+    case $arg in
+      h)
+        dv_del_help
+        ;;
+      *)
+        exit 1
+        ;;
+    esac
+  done
+
+  shift $(($OPTIND-1))
+
+  # get positional param
   local DB=$1
 
   # sanity
   [ -z "$DB" ] && exit_error "No database given for removal"
+  [ $# -ne 1 ] && exit_error "Too many parameters"
 
   # check if DB exists
   command_db_list | egrep -q "^$DB$" || exit_error "Database $DB does not exist"
@@ -448,18 +467,74 @@ db_del_help() {
 }
 
 ## add database
-db_add() {
+command_db_add() {
+  local USRS= USR= UNAME= HOST= OPTIND=
+  local OPTS="hu:f:"
+
+  while getopts $OPTS arg; do
+    case $arg in
+      h)
+        user_add_help
+        ;;
+      u)
+        USRS="$USRS $OPTARG"
+        ;;
+      f)
+        DUMP=$OPTARG
+        ;;
+      *)
+        exit 1
+        ;;
+    esac
+  done
+
+  shift $(($OPTIND-1))
+
+  # get positional param
   local DB=$1
 
   # check if DB exists
+  [ -z "$DB" ] && exit_error "No database given"
+  [ $# -ne 1 ] && exit_error "Too many parameters"
+  command_db_list | egrep -q "^$DB$" && exit_error "Database $DB already exists"
 
-  # add database
+  # dump file
+  [ -n "$DUMP" -a ! -e "$DUMP" ] && exit_error "Dump file '$DUMP' not found"
+
+  # check if given users exist
+  if [ -n "$USRS" ]; then
+    for USR in $USRS; do
+      echo $USR | egrep -q ".+@.+" || exit_error \
+        "User $USR has not form user@host"
+      command_user_list | grep -q "$USR" || \
+        exit_error "User $USR does not exist"
+    done
+  fi
+
+  # add user
+  SQL="CREATE DATABASE $DB"
+  mysql_exec "$SQL" || exit_error "Creating database"
+  print_info "Created database '$DB'"
+
+  # grant all privileges to users
+  if [ -n "$USRS" ]; then
+    for USR in $USRS; do
+      IFS=@ read UNAME HOST <<< "$USR"
+      SQL="GRANT ALL ON $DB.* TO '$UNAME'@'$HOST';"
+      mysql_exec "$SQL" || exit_error "Granting all privileges to database '$DB'"
+      print_info "Granted all privileges for '$USR' to '$DB'"
+    done
+  fi
 }
 
 db_add_help() {
-  echo "Usage: $TOOLNAME db del database"
+  echo "Usage: $TOOLNAME db add [options] DATABASE"
   echo
-  echo "Remove given MySQL database."
+  echo "Add new database. Optionally grant all privileges for given existing user or more users."
+  echo
+  echo "Options:"
+  echo " -f dump          Restore given dump to the database"
+  echo " -u user@host     Grant all privileges for given users, can be specified multiple times"
   echo
 
   exit 0
