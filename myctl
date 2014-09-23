@@ -1,11 +1,11 @@
-#!/bin/bash
+#!/bin/bash -f
 #
 # Author: Miroslav Vadkerti <miro.vadkerti at mogdesign.eu>
 #
 
 # globals
-VERSION="0.3 (Dark Hawk)"
-TOOLNAME=${0#./}
+VERSION="0.4 (Dark Hawk)"
+TOOLNAME=$(basename $0)
 SYSTEM_CONFIG="/etc/$TOOLNAME.conf"
 USER_CONFIG="$HOME/.$TOOLNAME.conf"
 COMMAND=$1
@@ -20,15 +20,16 @@ DEF_HOST="localhost"
 # helpers
 #
 print_info() {
-  echo ":: $@"
+  echo ":: $1"
 }
 
 print_error() {
-  echo "Error: $@"
+  echo "Error: $1"
 }
 
 exit_error() {
-  print_error "$@"
+  print_error "$1"
+  [ -n "$2" ] && { echo; $2; }
   exit 1
 }
 
@@ -37,8 +38,20 @@ mysql_exec() {
     mysql -u$MYSQL_USER -p$MYSQL_PASSWD -h$MYSQL_HOST \
       -P$MYSQL_PORT --skip-column-names
   else
+    echo "$@" | mysql -u$MYSQL_USER -p$MYSQL_PASSWD -h$MYSQL_HOST \
+      -P$MYSQL_PORT --skip-column-names
+  fi
+}
+
+mysql_exec_db() {
+  [ -z "$1" ] && exit_error "No database for $FUNCNAME"
+
+  if [ -z "$2" ]; then
     mysql -u$MYSQL_USER -p$MYSQL_PASSWD -h$MYSQL_HOST \
-      -P$MYSQL_PORT --skip-column-names <<< "$@"
+      -P$MYSQL_PORT -D$1 --skip-column-names
+  else
+    echo ${@:2} | mysql -u$MYSQL_USER -p$MYSQL_PASSWD -h$MYSQL_HOST \
+      -P$MYSQL_PORT -D$1 --skip-column-names
   fi
 }
 
@@ -68,6 +81,12 @@ confirm() {
       echo "Cancelled!"
       exit 1
   esac
+}
+
+# check if database exists
+check_db() {
+  command_db_list | egrep -q "^$1$"
+  return $?
 }
 
 #
@@ -118,7 +137,6 @@ show_help() {
   echo
   echo "Available commands:"
   echo " db          Manage and list databases"
-  echo " dump        Create MySQL dump"
   echo " shell       Get MySQL shell or execute SQL statement"
   echo " user        Manage and list users"
   echo
@@ -145,6 +163,21 @@ show_help() {
 #
 # user management
 #
+
+## user command help
+command_user() {
+  echo "Usage: $TOOLNAME user [sub-command] [options]"
+  echo
+  echo "Available sub-commands:"
+  echo "  add     Add new user"
+  echo "  del     Delete user"
+  echo "  list    List users with available databases"
+  echo
+  echo "Run sub-command with -h parameter to get detailed help."
+  echo
+
+  exit 0
+}
 
 ## add user
 command_user_add() {
@@ -174,9 +207,9 @@ command_user_add() {
 
   shift $(($OPTIND-1))
 
-  [ -z "$1" ] && exit_error "No username given"
-  [ $# -ne 1 ] && exit_error "Too many parameters"
-  [ -n "$DUMP" -a -z "$DB" ] && exit_error "No database given. Option -f requires -d"
+  [ -z "$1" ] && exit_error "No username given" user_add_help
+  [ $# -ne 1 ] && exit_error "Too many parameters" user_add_help
+  [ -n "$DUMP" -a -z "$DB" ] && exit_error "No database given. Option -f requires -d" user_add_help
   [ -n "$DUMP" -a ! -e "$DUMP" ] && exit_error "Dump file '$DUMP' not found"
   [ -n "$DUMP" -a -e "$DUMP" ] || exit_error "Dump $DUMP does not exist"
 
@@ -207,12 +240,8 @@ command_user_add() {
     command_db_add -u "$UNAME@$HOST" $DB
   fi
 
-  if [ -n "$DUMP" ]; then
-    { file "$DUMP" | grep -q "gzip" && gunzip < $DUMP || cat $DUMP; } | \
-      mysql -u$MYSQL_USER -p$MYSQL_PASSWD -h$MYSQL_HOST $DB || exit_error \
-        "Restoring dump $DUMP to $DB - unsupported format or corrupted file"
-    print_info "Restored MySQL dump '$DUMP' to database '$DB'"
-  fi
+  # restore dump from given file
+  [ -n "$DUMP" ] && command_db_restore $DB $DUMP
 }
 
 user_add_help() {
@@ -256,9 +285,9 @@ command_user_del() {
 
   shift $(($OPTIND-1))
 
-  [ -z "$1" ] && exit_error "No username given"
+  [ -z "$1" ] && exit_error "No username given" user_del_help
   [ -n "$DBS" -a -n "$DALL" ] && exit_error \
-    "Only one option for removing databases can be specified"
+    "Only one option for removing databases can be specified" user_del_help
 
   IFS=@ read UNAME HOST <<< "$1"
   [ -z "$HOST" ] && HOST=$DEF_HOST
@@ -373,24 +402,29 @@ user_list_help() {
   exit 0
 }
 
-## user command help
-command_user() {
-  echo "Usage: $TOOLNAME user [sub-command] [options]"
+
+#
+# database management
+#
+
+## db command help
+command_db() {
+  echo "Usage: $TOOLNAME db [sub-command] [options]"
+  echo
+  echo "MySQL database management."
   echo
   echo "Available sub-commands:"
-  echo "  add     Add new user"
-  echo "  del     Delete user"
-  echo "  list    List users with available databases"
+  echo "  add      Add new database"
+  echo "  del      Delete database"
+  echo "  dump     Dump database contents"
+  echo "  list     List databases"
+  echo "  restore  Restore database from dump"
   echo
   echo "Run sub-command with -h parameter to get detailed help."
   echo
 
   exit 0
 }
-
-#
-# database management
-#
 
 ## list all databases
 command_db_list() {
@@ -423,13 +457,15 @@ db_list_help() {
 }
 
 ## remove database
+command_db_delete() { command_db_del $@; }
+command_db_remove() { command_db_del $@; }
 command_db_del() {
   local OPTS="h"
 
   while getopts $OPTS arg; do
     case $arg in
       h)
-        dv_del_help
+        db_del_help
         ;;
       *)
         exit 1
@@ -443,11 +479,11 @@ command_db_del() {
   local DB=$1
 
   # sanity
-  [ -z "$DB" ] && exit_error "No database given for removal"
-  [ $# -ne 1 ] && exit_error "Too many parameters"
+  [ -z "$DB" ] && exit_error "No database given for removal" db_del_help
+  [ $# -ne 1 ] && exit_error "Too many parameters" db_del_help
 
   # check if DB exists
-  command_db_list | egrep -q "^$DB$" || exit_error "Database $DB does not exist"
+  check_db "$DB" || exit_error "Database $DB does not exist"
 
   # confirm removal
   confirm "Really remove MySQL database $DB"
@@ -467,6 +503,7 @@ db_del_help() {
 }
 
 ## add database
+command_db_create() { command_db_add $@; }
 command_db_add() {
   local USRS= USR= UNAME= HOST= OPTIND=
   local OPTS="hu:f:"
@@ -474,7 +511,7 @@ command_db_add() {
   while getopts $OPTS arg; do
     case $arg in
       h)
-        user_add_help
+        db_add_help
         ;;
       u)
         USRS="$USRS $OPTARG"
@@ -494,9 +531,9 @@ command_db_add() {
   local DB=$1
 
   # check if DB exists
-  [ -z "$DB" ] && exit_error "No database given"
-  [ $# -ne 1 ] && exit_error "Too many parameters"
-  command_db_list | egrep -q "^$DB$" && exit_error "Database $DB already exists"
+  [ -z "$DB" ] && exit_error "No database name given" db_add_help
+  [ $# -ne 1 ] && exit_error "Too many parameters" db_add_help
+  check_db "$DB" && exit_error "Database $DB already exists"
 
   # dump file
   [ -n "$DUMP" -a ! -e "$DUMP" ] && exit_error "Dump file '$DUMP' not found"
@@ -525,6 +562,9 @@ command_db_add() {
       print_info "Granted all privileges for '$USR' to '$DB'"
     done
   fi
+
+  # restore dump from given file
+  [ -n "$DUMP" ] && command_db_restore $DB $DUMP
 }
 
 db_add_help() {
@@ -540,35 +580,19 @@ db_add_help() {
   exit 0
 }
 
-## db command help
-command_db() {
-  echo "Usage: $TOOLNAME db [sub-command] [options]"
-  echo
-  echo "MySQL database management."
-  echo
-  echo "Available sub-commands:"
-  echo "  add     Add new database"
-  echo "  del     Delete database"
-  echo "  list    List databases"
-  echo
-  echo "Run sub-command with -h parameter to get detailed help."
-  echo
-
-  exit 0
-}
-
-
-#
-# shell
-#
-
-command_shell() {
-  local OPTS="h"
+## restore database
+command_db_res() { command_db_restore $@; }
+command_db_restore() {
+  local OPTIND= REMOVE= FILEINFO=
+  local OPTS="hr"
 
   while getopts $OPTS arg; do
     case $arg in
       h)
-        shell_help
+        db_restore_help
+        ;;
+      r)
+        REMOVE=yes
         ;;
       *)
         exit 1
@@ -576,16 +600,167 @@ command_shell() {
     esac
   done
 
+  shift $(($OPTIND-1))
+
+  # get positional params
+  local DB=$1
+  local DUMP=$2
+
+  # check if DB exists
+  [ -z "$DB" ] && exit_error "No database given" db_restore_help
+  [ $# -ne 2 ] && exit_error "Restore needs 2 parameters" db_restore_help
+  check_db "$DB" || exit_error "Database $DB does not exist"
+
+  # check if dump exists
+  [ -e "$DUMP" ] || exit_error "Dump file $DUMP not found"
+
+  # truncate database if requested, do no ask confirmation
+  if [ -n "$REMOVE" ]; then
+    command_shell <<< "DROP DATABASE $DB; CREATE DATABASE $DB" || \
+      exit_error "Failed to remove database contents"
+    print_info "Removed database '$DB' contents"
+  fi
+
+  # try to restore
+  FILEINFO=$(file -b $DUMP)
+  case ${FILEINFO,,} in
+    bzip2*) bunzip2 < $DUMP ;;
+    gzip*) gunzip < $DUMP ;;
+    zip*) unzip -p $DUMP ;;
+    *) cat $DUMP ;;
+  esac | mysql -u$MYSQL_USER -p$MYSQL_PASSWD -h$MYSQL_HOST $DB || \
+    exit_error "Restoring dump $DUMP to $DB failed"
+
+  # success :)
+  print_info "Restored MySQL dump '$DUMP' to database '$DB'"
+}
+
+db_restore_help() {
+  echo "Usage: $TOOLNAME db restore [options] DATABASE FILE"
+  echo
+  echo "Restore database contexts from given dump file. Optionally truncate"
+  echo "database before restoring. The dump file can be uncompressed"
+  echo "or compressed MySQL dump. Supported compression formats: gzip, zip"
+  echo "and bzip2."
+  echo
+  echo "Options:"
+  echo " -h          Show help"
+  echo " -r          Drop all tables before restore"
+  echo
+
+  exit 0
+}
+
+## dump database
+command_db_dump() {
+  local OPTIND=
+  local COMPRESS="gzip"
+  local SUFFIX="sql.gz"
+  local OPTS="hn"
+
+  while getopts $OPTS arg; do
+    case $arg in
+      h)
+        db_dump_help
+        ;;
+      n)
+        COMPRESS="cat"
+        SUFFIX="sql"
+        ;;
+      *)
+        exit 1
+        ;;
+    esac
+  done
+
+  shift $(($OPTIND-1))
+
+  # get positional params
+  local DB=$1
+  local DUMP=$2
+
+  # check if DB exists
+  [ -z "$DB" ] && exit_error "No database given" db_dump_help
+  [ $# -gt 2 ] && exit_error "Dump accepts one or two parameters" db_dump_help
+  check_db "$DB" || exit_error "Database $DB does not exist"
+
+  # check if dump exists or create a new filename
+  if [ -n "$DUMP" ]; then
+    [ -e "$DUMP" ] && exit_error "Dump file already exists"
+  else
+    DUMP="$DB-$(date +%Y%m%d_%H-%M).$SUFFIX"
+  fi
+
+  mysqldump -u$MYSQL_USER -p$MYSQL_PASSWD -h$MYSQL_HOST $DB | \
+    $COMPRESS > $DUMP || exit_error "Dumping database '$DB' failed"
+
+  # success :)
+  print_info "Dumped database '$DB' to '$DUMP'"
+}
+
+db_dump_help() {
+  echo "Usage: $TOOLNAME db dump [options] DATABASE [FILE]"
+  echo
+  echo "Dump database contexts to file. By default the dump is compressed"
+  echo "via gzip and the the dump name is generated from database name and"
+  echo "current data. Optionally the output FILE can be specified."
+  echo "The compression can be disabled via the -n option."
+  echo
+  echo "Options:"
+  echo " -h          Show help"
+  echo " -n          Disable gzip compression"
+  echo
+
+  exit 0
+}
+#
+# shell
+#
+command_shell() {
+  local OPTS="hd:" OPTIND=
+  local MEXEC="mysql_exec"
+  local DB=
+
+  while getopts $OPTS arg; do
+    case $arg in
+      h)
+        shell_help
+        ;;
+      d)
+        DB="$OPTARG"
+        ;;
+      *)
+        exit 1
+        ;;
+    esac
+  done
+  shift $(($OPTIND-1))
+
+  # check if db exists
+  if [ -n "$DB" ]; then
+    check_db $DB || exit_error "Database '$DB' does not exist"
+    MEXEC="mysql_exec_db $DB"
+  fi
+
   # run the shell
-  [ -z "$SUBCOMMAND" ] && mysql_exec || mysql_exec "$@"
+  if [ -z "$SUBCOMMAND" ]; then
+    $MEXEC
+  else
+    $MEXEC "$@"
+  fi
 
   return $?
 }
 
 shell_help() {
-  echo "Usage: $TOOLNAME shell"
+  echo "Usage: $TOOLNAME shell [options] [SQL]"
   echo
-  echo "Get an administrator MySQL shell."
+  echo "Get an administrator MySQL shell or execute given SQL."
+  echo "Optionally use specified database."
+  echo
+  echo "Options:"
+  echo " -h           Show help"
+  echo " -d DATABASE  Run shell or execute command for given database."
   echo
 
   exit 0
@@ -593,7 +768,7 @@ shell_help() {
 
 
 #
-# main
+# Main
 #
 
 # early help
