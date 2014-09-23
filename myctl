@@ -211,7 +211,6 @@ command_user_add() {
   [ $# -ne 1 ] && exit_error "Too many parameters" user_add_help
   [ -n "$DUMP" -a -z "$DB" ] && exit_error "No database given. Option -f requires -d" user_add_help
   [ -n "$DUMP" -a ! -e "$DUMP" ] && exit_error "Dump file '$DUMP' not found"
-  [ -n "$DUMP" -a -e "$DUMP" ] || exit_error "Dump $DUMP does not exist"
 
   IFS=@ read UNAME HOST <<< "$1"
   [ -z "$HOST" ] && HOST=$DEF_HOST
@@ -233,7 +232,7 @@ command_user_add() {
   # add user
   SQL="CREATE USER '$UNAME'@'$HOST' IDENTIFIED BY '$PASSWD';"
   mysql_exec "$SQL" || exit_error "Addin user failed"
-  print_info "Created user '$UNAME@$HOST' with password $PASSWD"
+  print_info "Created user '$UNAME@$HOST' with password '$PASSWD'"
 
   # add database
   if [ -n "$DB" ]; then
