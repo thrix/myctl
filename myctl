@@ -15,6 +15,7 @@ SUBCOMMAND=$2
 MYSQL_HOST="localhost"
 MYSQL_PORT="3306"
 DEF_HOST="localhost"
+MYSQL_OPTS="--skip-column-names" # by default do not show column names
 
 #
 # helpers
@@ -36,10 +37,10 @@ exit_error() {
 mysql_exec() {
   if [ -z "$1" ]; then
     mysql -u$MYSQL_USER -p$MYSQL_PASSWD -h$MYSQL_HOST \
-      -P$MYSQL_PORT --skip-column-names
+      -P$MYSQL_PORT $MYSQL_OPTS
   else
     echo "$@" | mysql -u$MYSQL_USER -p$MYSQL_PASSWD -h$MYSQL_HOST \
-      -P$MYSQL_PORT --skip-column-names
+      -P$MYSQL_PORT $MYSQL_OPTS
   fi
 }
 
@@ -48,10 +49,10 @@ mysql_exec_db() {
 
   if [ -z "$2" ]; then
     mysql -u$MYSQL_USER -p$MYSQL_PASSWD -h$MYSQL_HOST \
-      -P$MYSQL_PORT -D$1 --skip-column-names
+      -P$MYSQL_PORT -D$1 $MYSQL_OPTS
   else
-    echo ${@:2} | mysql -u$MYSQL_USER -p$MYSQL_PASSWD -h$MYSQL_HOST \
-      -P$MYSQL_PORT -D$1 --skip-column-names
+    echo "${@:2}" | mysql -u$MYSQL_USER -p$MYSQL_PASSWD -h$MYSQL_HOST \
+      -P$MYSQL_PORT -D$1 $MYSQL_OPTS
   fi
 }
 
@@ -85,7 +86,7 @@ confirm() {
 
 # check if database exists
 check_db() {
-  command_db_list | egrep -q "^$1$"
+  command_db_list | egrep -q -- "^$1 "
   return $?
 }
 
@@ -220,7 +221,7 @@ command_user_add() {
     exit_error "User $UNAME@$HOST already exists"
 
   # check if database already exists
-  mysql_exec "show databases;" | egrep -q "^$DB$" && exit_error \
+  mysql_exec "show databases;" | egrep -q -- "^$DB$" && exit_error \
     "Database $DB already exists, cannot create"
 
   # check if 
@@ -296,7 +297,7 @@ command_user_del() {
     exit_error "User $UNAME@$HOST does not exits"
 
   # check if any databases exists
-  [ -n "$DALL" ] && command_user_list "$UNAME@$HOST" | grep -q "(none)" && \
+  [ -n "$DALL" ] && command_user_list "$UNAME@$HOST" | grep -q "-- none --" && \
     exit_error "No database exists for $UNAME@$HOST"
 
   # check if given databases exist for user
@@ -360,7 +361,7 @@ command_user_list() {
     # for all users, hosts print their databases
     while read USER_HOST_DB; do
       read USR HOST DB <<< "$USER_HOST_DB"
-      [ "$DB" = "NULL" ] && DB="(none)"
+      [ "$DB" = "NULL" ] && DB="-- none --"
       if [ "$USR" = "$USRPREV" -a "$HOST" = "$HOSTPREV" ]; then
         echo -n "$DB "
         continue
@@ -372,7 +373,7 @@ command_user_list() {
       USRPREV=$USR
       HOSTPREV=$HOST
       FIRST="no"
-    done <<< "$DATA" | sort | egrep "$1"
+    done <<< "$DATA" | sort | egrep -- "$1"
   )
 
   if [ -z "$LIST" ]; then
@@ -381,7 +382,7 @@ command_user_list() {
   fi
 
   {
-    printf "%-40s%s\n" "User@Host" "Privileges to database(s)"
+    printf "%-40s%s\n" "User@Server" "Privileges to database(s)"
     printf "%80s\n" | tr ' ' -
     echo "$LIST"
   } | less -F
@@ -391,7 +392,8 @@ user_list_help() {
   echo "Usage: $TOOLNAME user list [REGEXP]"
   echo
   echo "List available mysql users with privilages to databases."
-  echo "Currently the privileges are not distinguished."
+  echo "Currently the privileges are not distinguished and if user"
+  echo "has at least one permission it is shown."
   echo
   echo "Optionally a regular expressoin can be passwd to filter out results."
   echo "This REGEXP is passed to egrep directly."
@@ -427,7 +429,10 @@ command_db() {
 
 ## list all databases
 command_db_list() {
-  local DBS=$(command_shell "show databases" | sort | egrep "$1")
+  local DB= PRIV=
+  local DBS=$(mysql_exec "show databases" | sort | egrep -- "$1")
+  local PRIVS=$(mysql_exec "SELECT db,user,host FROM mysql.db" | awk '{print $1,$2"@"$3}') 
+  local COUNT=0
 
   if [ -z "$DBS" ]; then
     echo "No database found"
@@ -435,9 +440,23 @@ command_db_list() {
   fi
 
   {
-    echo "Database"
-    printf "%40s\n" | tr ' ' -
-    echo "$DBS"
+    printf "%-40s%s\n" "Database" "Users with privileges"
+    printf "%80s\n" | tr ' ' -
+    for DB in $DBS; do
+      PRIV=$(echo "$PRIVS" | egrep -- "^$DB " | awk '{print $2}')
+      [ -z "$PRIV" ] && PRIV="-- none --"
+      printf "%-40s" "$DB"
+      COUNT=0
+      for OPRIV in $PRIV; do
+        if [ $COUNT -eq 3 ]; then
+          COUNT=0
+          printf "\n%-40s" "$DB"
+        fi
+        echo -n "$OPRIV "
+        COUNT=$((COUNT+1))
+      done
+      echo
+    done
   } | less -F
 }
 
@@ -488,7 +507,7 @@ command_db_del() {
   confirm "Really remove MySQL database $DB"
 
   # remove database
-  command_shell "DROP DATABASE $DB"
+  mysql_exec "DROP DATABASE $DB"
   print_info "Database $DB removed"
 }
 
@@ -540,7 +559,7 @@ command_db_add() {
   # check if given users exist
   if [ -n "$USRS" ]; then
     for USR in $USRS; do
-      echo $USR | egrep -q ".+@.+" || exit_error \
+      echo $USR | egrep -q -- ".+@.+" || exit_error \
         "User $USR has not form user@host"
       command_user_list | grep -q "$USR" || \
         exit_error "User $USR does not exist"
@@ -615,7 +634,7 @@ command_db_restore() {
 
   # truncate database if requested, do no ask confirmation
   if [ -n "$REMOVE" ]; then
-    command_shell <<< "DROP DATABASE $DB; CREATE DATABASE $DB" || \
+    mysql_exec <<< "DROP DATABASE $DB; CREATE DATABASE $DB" || \
       exit_error "Failed to remove database contents"
     print_info "Removed database '$DB' contents"
   fi
@@ -712,18 +731,22 @@ db_dump_help() {
 
   exit 0
 }
+
 #
 # shell
 #
 command_shell() {
-  local OPTS="hd:" OPTIND=
+  local OPTS="hnd:" OPTIND=
   local MEXEC="mysql_exec"
-  local DB=
+  local MOPTS=""
 
   while getopts $OPTS arg; do
     case $arg in
       h)
         shell_help
+        ;;
+      n)
+        MOPTS="--skip-column-names"
         ;;
       d)
         DB="$OPTARG"
@@ -738,14 +761,14 @@ command_shell() {
   # check if db exists
   if [ -n "$DB" ]; then
     check_db $DB || exit_error "Database '$DB' does not exist"
-    MEXEC="mysql_exec_db $DB"
+    MEXEC="MYSQL_OPTS=\"$MOPTS\" mysql_exec_db $DB"
   fi
 
   # run the shell
   if [ -z "$SUBCOMMAND" ]; then
-    $MEXEC
+    MYSQL_OPTS="$MOPTS" $MEXEC
   else
-    $MEXEC "$@"
+    MYSQL_OPTS="$MOPTS" $MEXEC "$@"
   fi
 
   return $?
@@ -754,11 +777,13 @@ command_shell() {
 shell_help() {
   echo "Usage: $TOOLNAME shell [options] [SQL]"
   echo
-  echo "Get an administrator MySQL shell or execute given SQL."
-  echo "Optionally use specified database."
+  echo "Get an administrator MySQL shell or execute given SQL. Optionally"
+  echo "use the specified database. By default the results are show with"
+  echo "column names. Use the -n option to omit the column names"
   echo
   echo "Options:"
   echo " -h           Show help"
+  echo " -n           Do not show column names"
   echo " -d DATABASE  Run shell or execute command for given database."
   echo
 
