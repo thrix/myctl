@@ -899,8 +899,8 @@ install_user() {
     cp -f $0 $HOME/bin/
     # check if $HOME/bin in PATH
     grep -q ":$HOME/bin" <<< "$PATH" || printf \
-      "Please note that $HOME/bin folder doesn't seem to be in PATH.\n\
-Update your profile with 'export PATH=\$PATH:\$HOME/bin' if desired."
+      "\nPlease note that $HOME/bin folder doesn't seem to be in PATH.\n\
+Update your profile with 'export PATH=\$PATH:\$HOME/bin' if desired.\n"
   fi
   echo
   echo "User installation finished successfully. Enjoy!"
