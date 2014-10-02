@@ -977,11 +977,13 @@ fi
 # version
 [[ "$COMMAND" =~ (-v|--version) ]] && { echo "Version: $VERSION"; exit 0; }
 
-# load configuration
-load_config
+if [ "$COMMAND" != "install" ]; then
+  # load configuration
+  load_config
 
-# sanity checks
-sanity_checks
+  # sanity checks
+  sanity_checks
+fi
 
 # shift away command and sub-command
 shift 2
