@@ -1,10 +1,23 @@
 #!/bin/bash -f
 #
+# Copyright (C) 2014 Miroslav Vadkerti
+# This program is free software: you can redistribute it and/or modify it under
+# the terms of the GNU General Public License as published by the Free Software
+# Foundation, either version 3 of the License, or (at your option) any later
+# version.
+#
+# This program is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+# FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License along
+# with this program. If not, see http://www.gnu.org/licenses/. 
+#
 # Author: Miroslav Vadkerti <miro.vadkerti at mogdesign.eu>
 #
 
 # globals
-VERSION="0.4 (Dark Hawk)"
+VERSION="0.5"
 TOOLNAME=$(basename $0)
 SYSTEM_CONFIG="/etc/$TOOLNAME.conf"
 USER_CONFIG="$HOME/.$TOOLNAME.conf"
@@ -34,6 +47,11 @@ exit_error() {
   exit 1
 }
 
+exit_info() {
+  print_info "$1"
+  exit 0
+}
+
 mysql_exec() {
   if [ -z "$1" ]; then
     mysql -u$MYSQL_USER -p$MYSQL_PASSWD -h$MYSQL_HOST \
@@ -57,12 +75,17 @@ mysql_exec_db() {
 }
 
 ask_user() {
-  local INP=
+    local ANS= DEFAULT="$2"
 
-  echo -n "$2: "
-  read INP
+    # make sure we get a value when no default
+    while [ -z "$ANS" ]; do
+        [ -z "$DEFAULT" ] && echo -n "$1: " >/dev/tty || \
+            echo -n "$1 [$DEFAULT]: " >/dev/tty
+        read ANS
+        [ -z "$ANS" ] && ANS="$DEFAULT"
+    done
 
-  eval $1="$INP"
+    echo "$ANS"
 }
 
 confirm() {
@@ -82,6 +105,18 @@ confirm() {
       echo "Cancelled!"
       exit 1
   esac
+}
+
+# check if mytl inst
+is_myctl_installed() {
+  # binary reachable
+  which myctl &>/dev/null || return 1
+  # configuration exists
+  [ -e "$SYSTEM_CONFIG" -o -e "$USER_CONFIG" ] || return 1
+  # myctl works
+  mysql_exec "exit" &>/dev/null || return 1
+
+  return 0
 }
 
 # check if database exists
@@ -115,14 +150,13 @@ load_config() {
   fi
 
   if [ ! -e "$USER_CONFIG" -a ! -e "$SYSTEM_CONFIG" ]; then
-    echo "No configuration file found. Please create $USER_CONFIG"
+    echo "No configuration file found. Please run install or create $USER_CONFIG"
     echo "or $SYSTEM_CONFIG file with at least these variables:"
     echo
     echo "# mysql administrator username and password"
     echo "MYSQL_USR=username"
     echo "MYSQL_PASSWD=password"
     echo
-    echo "Refer to program help for more information"
     exit 0
   fi
 }
@@ -138,6 +172,9 @@ show_help() {
   echo
   echo "Available commands:"
   echo " db          Manage and list databases"
+  # show install only if not installed
+  is_myctl_installed || \
+  echo " install     Install $TOOLNAME tool"
   echo " shell       Get MySQL shell or execute SQL statement"
   echo " user        Manage and list users"
   echo
@@ -150,13 +187,13 @@ show_help() {
   echo
   echo " Mandatory variables:"
   echo " MYSQL_USER      - MySQL administrator username" 
-  echo " MYSQL_PASSWD  - MySQL administrator password" 
+  echo " MYSQL_PASSWD    - MySQL administrator password" 
   echo
   echo " Optional variables:"
   echo " MYSQL_HOST      - MySQL hostname (default: localhost)" 
   echo " MYSQL_PORT      - MySQL port (default: 3309)" 
-  echo " DEF_HOST        - Default host to add user (default: localhost)"
-  echo " DEF_PASSWD    - Default password for added user"
+  echo " DEF_HOST        - Default host for adding user (default: localhost)"
+  echo " DEF_PASSWD      - Default password for added user (ask user if not present)"
   echo
   exit 0
 }
@@ -170,9 +207,9 @@ command_user() {
   echo "Usage: $TOOLNAME user [sub-command] [options]"
   echo
   echo "Available sub-commands:"
-  echo "  add     Add new user"
-  echo "  del     Delete user"
-  echo "  list    List users with available databases"
+  echo "  add      Add new user"
+  echo "  del      Delete user"
+  echo "  list     List users with available databases"
   echo
   echo "Run sub-command with -h parameter to get detailed help."
   echo
@@ -227,7 +264,7 @@ command_user_add() {
   # check if 
 
   while [ -z "$PASSWD" ]; do
-    ask_user PASSWD "Enter '$UNAME@$HOST' password"
+    PASSWD=$(ask_user "Enter '$UNAME@$HOST' password")
   done
 
   # add user
@@ -788,6 +825,137 @@ shell_help() {
   echo
 
   exit 0
+}
+
+
+#
+# install
+#
+install_get_env() {
+  local RET=1
+
+  echo
+  echo "You will now be asked for configuration details for myctl. Please note"
+  echo "that you will need credentials for an MySQL administrator. The tool"
+  echo "will use this user for every operation."
+  echo
+
+  while [ $RET -ne 0 ]; do
+    MYSQL_USER=$(ask_user "Enter MySQL admin username")
+    MYSQL_PASSWD=$(ask_user "Enter MySQL admin password")
+    mysql_exec "exit" >/dev/null; RET=$?
+    if [ $RET -eq 0 ]; then
+      # TODO check if user admin
+      break
+    else
+      print_error "Cannot login with the given credentials to MySQL! Try again ..."
+      echo
+    fi
+  done
+
+  MYSQL_HOST=$(ask_user "MySQL host" "localhost")
+  MYSQL_PORT=$(ask_user "MySQL port" "3306")
+  DEF_HOST=$(ask_user "Default host for new user" "localhost")
+  DEF_PASSWD=$(ask_user "Default password for new user" "ask for password")
+  [ "$DEF_PASSWD" == "ask for password" ] && DEF_PASSWD=
+}
+
+write_config() {
+  mkdir -p $(dirname $1)
+  {
+    echo "# $TOOLNAME configuration file created $(date)"
+    echo
+    echo "# MySQL admin credentials"
+    echo "MYSQL_USER=\"$MYSQL_USER\""
+    echo "MYSQL_PASSWD=\"$MYSQL_PASSWD\""
+    echo
+    echo "# MySQL server details"
+    echo "MYSQL_HOST=\"$MYSQL_HOST\""
+    echo "MYSQL_PORT=\"$MYSQL_PORT\""
+    echo
+    echo "# Default host for new users"
+    echo "DEF_HOST=\"$DEF_HOST\""
+    echo
+    echo "# Default password for new user"
+    echo "DEF_PASSWD=\"$DEF_PASSWD\""
+  } > $1
+
+  echo "Configuration file $1 has been created"
+  echo
+}
+
+install_user() {
+  local ANSW=
+
+  echo
+  echo "User installation"
+  echo "-----------------"
+  install_get_env
+  echo
+  write_config $USER_CONFIG
+  ANSW=$(ask_user "Copy tool to $HOME/bin folder? (y/n)")
+  if [ "$ANSW" = "y" ]; then
+    mkdir -p "$HOME/bin"
+    cp -f $0 $HOME/bin/
+    # check if $HOME/bin in PATH
+    grep -q ":$HOME/bin" <<< "$PATH" || printf \
+      "Please note that $HOME/bin folder doesn't seem to be in PATH.\n\
+Update your profile with 'export PATH=\$PATH:\$HOME/bin' if desired."
+  fi
+  echo
+  echo "User installation finished successfully. Enjoy!"
+}
+
+install_system() {
+  echo
+  echo "System installation"
+  echo "-------------------"
+  install_get_env
+  echo
+}
+
+command_install() {
+  local IMETHOD
+
+  is_myctl_installed && exit_info "Tool is already installed and configure correctly"
+
+  echo "You are about to install and configure MySQL command line tool ($TOOLNAME)"
+  echo "on your system."
+  echo
+  confirm "Do you want to continue"
+  echo
+  echo "This tool can be installed in two ways:"
+  echo
+  echo "1. System-wide installation"
+  echo "   This will install the tool for all users and setup a system-wide configuration."
+  echo "   A new group - myctl - will be created and only users in this group will be able"
+  echo "   to use the tool. The configuration file containing possibly sensitive information"
+  echo "   will be only readable by group members. Root privileges are required for this"
+  echo "   type of installation."
+  echo
+  echo "2. User installation"
+  echo "   This will install the tool only for current user. The tool will be installed in"
+  echo "   $HOME/bin/ directory. The directory will be created if it does not exist and it"
+  echo "   will be added to the PATH via .bashrc if you are running on bash. The configuration"
+  echo "   file will be created in the users home directory."
+  echo
+
+  IMETHOD=$(ask_user "Please choose installation method (1/2) or enter 'q' to quit")
+
+  case $IMETHOD in
+    1)
+      install_system || exit_error "System installation failed"
+      ;;
+    2)
+      install_user || exit_error "User installation failed"
+      ;;
+    q)
+      exit_error "Installation cancelled."
+      ;;
+    *)
+      exit_error "Uknown choice '$IMETHOD'. Cowardly exiting ..."
+      ;;
+  esac
 }
 
 
