@@ -28,6 +28,7 @@ MYSQL_PORT="3306"
 DEF_HOST="localhost"
 MYSQL_OPTS="--skip-column-names" # by default do not show column names
 MYCTL_GROUP="myctl"
+DB_IGNORE_LIST="^(mysql|performance_schema|information_schema)$" # ignore these dbs in listing
 
 #
 # helpers
@@ -470,7 +471,7 @@ command_db() {
 ## list all databases
 command_db_list() {
   local DB= PRIV=
-  local DBS=$(mysql_exec "show databases" | sort | egrep -- "$1")
+  local DBS=$(mysql_exec "show databases" | egrep -v "$DB_IGNORE_LIST" | sort | egrep -- "$1")
   local PRIVS=$(mysql_exec "SELECT db,user,host FROM mysql.db" | awk '{print $1,$2"@"$3}') 
   local COUNT=0
 
