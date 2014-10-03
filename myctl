@@ -149,7 +149,7 @@ load_config() {
     source $USER_CONFIG
   fi
 
-  if [ ! -e "$USER_CONFIG" -a ! -e "$SYSTEM_CONFIG" ]; then
+  if [ ! -e "$USER_CONFIG" -a ! -e "$SYSTEM_CONFIG" -a "$COMMAND" != "install" ]; then
     echo "No configuration file found. Please run install or create $USER_CONFIG"
     echo "or $SYSTEM_CONFIG file with at least these variables:"
     echo
@@ -977,13 +977,11 @@ fi
 # version
 [[ "$COMMAND" =~ (-v|--version) ]] && { echo "Version: $VERSION"; exit 0; }
 
-if [ "$COMMAND" != "install" ]; then
-  # load configuration
-  load_config
+# load configuration
+load_config
 
-  # sanity checks
-  sanity_checks
-fi
+# sanity checks
+sanity_checks
 
 # shift away command and sub-command
 shift 2
