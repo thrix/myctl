@@ -17,18 +17,17 @@
 #
 
 # globals
-VERSION="0.5"
+VERSION="0.7"
 TOOLNAME=$(basename $0)
 SYSTEM_CONFIG="/etc/$TOOLNAME.conf"
 USER_CONFIG="$HOME/.$TOOLNAME.conf"
-COMMAND=$1
-SUBCOMMAND=$2
 
 # defaults
 MYSQL_HOST="localhost"
 MYSQL_PORT="3306"
 DEF_HOST="localhost"
 MYSQL_OPTS="--skip-column-names" # by default do not show column names
+MYCTL_GROUP="myctl"
 
 #
 # helpers
@@ -129,6 +128,18 @@ check_db() {
 # general functions
 #
 sanity_checks() {
+  # pop out if no configuration
+  if [ ! -e "$USER_CONFIG" -a ! -e "$SYSTEM_CONFIG" ]; then
+    echo "No configuration file found. Please run 'install' command or create"
+    echo "$USER_CONFIG or $SYSTEM_CONFIG file with at least these variables:"
+    echo
+    echo "# mysql administrator username and password"
+    echo "MYSQL_USR=username"
+    echo "MYSQL_PASSWD=password"
+    echo
+    exit 0
+  fi
+
   # check mandatory config
   [ -z "$MYSQL_USER" ] && exit_error "No MySQL admin user in configuration"
   [ -z "$MYSQL_PASSWD" ] && exit_error "No MySQL admin password in configuration"
@@ -139,41 +150,33 @@ sanity_checks() {
 }
 
 load_config() {
+  local RET=0
+
   # load system-wide config
   if [ -e "$SYSTEM_CONFIG" ]; then
-    source $SYSTEM_CONFIG
+    source $SYSTEM_CONFIG 2>/dev/null; RET=$?
   fi
 
   # load config from home directory
   if [ -e "$USER_CONFIG" ]; then
-    source $USER_CONFIG
-  fi
-
-  if [ ! -e "$USER_CONFIG" -a ! -e "$SYSTEM_CONFIG" -a "$COMMAND" != "install" ]; then
-    echo "No configuration file found. Please run install or create $USER_CONFIG"
-    echo "or $SYSTEM_CONFIG file with at least these variables:"
-    echo
-    echo "# mysql administrator username and password"
-    echo "MYSQL_USR=username"
-    echo "MYSQL_PASSWD=password"
-    echo
-    exit 0
+    source $USER_CONFIG 2>/dev/null
+  else
+    [ $RET -ne 0 ] && exit_error "Permission denied for $TOOLNAME system \
+configuration file. Are you in $MYCTL_GROUP group?"
   fi
 }
 
 
 show_help() {
-  echo "Usage: $TOOLNAME command [sub-command] [options]"
+  echo "Usage: $TOOLNAME [options] command [sub-command]"
   echo
   echo "MySQL command line tool for managing users, databases and displaying"
   echo "various useful information from MySQL database."
   echo
-  echo "Run command without parameters to get detailed help."
+  echo "Run command with -h parameter to get help."
   echo
   echo "Available commands:"
   echo " db          Manage and list databases"
-  # show install only if not installed
-  is_myctl_installed || \
   echo " install     Install $TOOLNAME tool"
   echo " shell       Get MySQL shell or execute SQL statement"
   echo " user        Manage and list users"
@@ -849,7 +852,6 @@ install_get_env() {
       break
     else
       print_error "Cannot login with the given credentials to MySQL! Try again ..."
-      echo
     fi
   done
 
@@ -880,8 +882,7 @@ write_config() {
     echo "DEF_PASSWD=\"$DEF_PASSWD\""
   } > $1
 
-  echo "Configuration file $1 has been created"
-  echo
+  print_info "Configuration file '$1' has been created"
 }
 
 install_user() {
@@ -890,28 +891,56 @@ install_user() {
   echo
   echo "User installation"
   echo "-----------------"
+
+  # write configuration file
   install_get_env
   echo
   write_config $USER_CONFIG
-  ANSW=$(ask_user "Copy tool to $HOME/bin folder? (y/n)")
-  if [ "$ANSW" = "y" ]; then
-    mkdir -p "$HOME/bin"
-    cp -f $0 $HOME/bin/
-    # check if $HOME/bin in PATH
-    grep -q ":$HOME/bin" <<< "$PATH" || printf \
-      "\nPlease note that $HOME/bin folder doesn't seem to be in PATH.\n\
-Update your profile with 'export PATH=\$PATH:\$HOME/bin' if desired.\n"
+
+  # install myctl to bin folder
+  if ! which $TOOLNAME &> /dev/null; then
+    ANSW=$(ask_user "Copy tool to $HOME/bin folder? (y/n)")
+    if [ "$ANSW" = "y" ]; then
+      mkdir -p "$HOME/bin"
+      cp -f $0 $HOME/bin/
+      # check if $HOME/bin in PATH
+      grep -q ":$HOME/bin" <<< "$PATH" || print_info \
+        "Please note that '$HOME/bin' folder doesn't seem to be in your PATH. \
+Update your profile with 'export PATH=\$PATH:\$HOME/bin'."
+    fi
   fi
-  echo
-  echo "User installation finished successfully. Enjoy!"
+
+  # we are done
+  print_info "User installation finished successfully. Enjoy!"
 }
 
 install_system() {
   echo
+
+  # check if we are root
+  [ $(id -u) -eq 0 ] || exit_error "Root required for system installation"
+
   echo "System installation"
   echo "-------------------"
+
+  # write configuration file
   install_get_env
   echo
+  write_config $SYSTEM_CONFIG
+
+  # create myctl group
+  if ! getent group $MYCTL_GROUP &> /dev/null; then
+    groupadd $MYCTL_GROUP
+  fi
+  print_info "Group '$MYCTL_GROUP' created. You need to add myctl users \
+to this group to be able to use it."
+  chmod 640 $SYSTEM_CONFIG
+  chown root:$MYCTL_GROUP $SYSTEM_CONFIG
+
+  # install myctl to system path
+  cp -f $0 /usr/bin
+  print_info "Tool installed to '/usr/bin' path"
+  print_info "System installation finished successfully. Enjoy!"
 }
 
 command_install() {
@@ -963,25 +992,35 @@ command_install() {
 # Main
 #
 
-# early help
-{ [[ "$COMMAND" =~ (-h|--help) ]] || [ -z "$COMMAND" ]; } && show_help 
+while getopts "hyv" OPTION
+do
+  case $OPTION in
+    h)
+        show_help
+        ;;
+    y)
+        CONFIRM=yes
+        ;;
+    v)
+        echo "Version: $VERSION"
+        exit
+        ;;
+    *)
+        exit 1
+        ;;
+  esac
+done
 
-# answer yes
-if [ "$COMMAND" = "-y" ]; then
-  CONFIRM=yes
-  shift
-  COMMAND=$1
-  SUBCOMMAND=$2
-fi
+shift $((OPTIND-1))
 
-# version
-[[ "$COMMAND" =~ (-v|--version) ]] && { echo "Version: $VERSION"; exit 0; }
+[ -n "$1" ] && COMMAND=$1 || show_help
+SUBCOMMAND=$2
 
 # load configuration
 load_config
 
 # sanity checks
-sanity_checks
+[ "$COMMAND" != "install" ] && sanity_checks
 
 # shift away command and sub-command
 shift 2
