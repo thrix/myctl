@@ -3,9 +3,38 @@
 MySQL command line tool for managing users, databases, database
 privileges and displaying useful information from MySQL database.
 
+Currently the tool supports:
+ * user management
+  * add users, optionally with database
+  * remove users, including some or all databases user has access to
+  * list users, including dbs user has access to
+ * database management
+  * add databases, optionally restore contents from dump file
+  * dump database contents to a file
+  * remove database
+  * restore database contents from a file
+ * shell
+  * get MySQL shell
+  * execute an SQL statement, optionally for given database
 
 ### Installation:
-TODO
+
+To install the tool run the _install_ command.  The tool can be installed in two ways:
+
+#### System-wide installation
+
+This will install the tool for all users and setup a system-wide configuration.
+A new group - myctl - will be created and only users in this group will be able
+to use the tool. The configuration file containing possibly sensitive information
+will be only readable by group members. Root privileges are required for this
+type of installation.
+  
+#### User installation
+
+This will install the tool only for current user. The tool will be installed in
+$HOME/bin/ directory. The directory will be created if it does not exist and it
+will be added to the PATH via .bashrc if you are running on bash. The configuration
+file will be created in the users home directory.
 
 ### Configuration file
 
