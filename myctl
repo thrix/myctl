@@ -964,9 +964,9 @@ command_install() {
   echo "   type of installation."
   echo
   echo "2. User installation"
-  echo "   This will install the tool only for current user. The tool will be installed in"
-  echo "   $HOME/bin/ directory. The directory will be created if it does not exist and it"
-  echo "   will be added to the PATH via .bashrc if you are running on bash. The configuration"
+  echo "   This will install the tool only for current user. The tool will be optionally installed in"
+  echo "   '$HOME/bin/' directory. The directory will be created if it does not exist and you"
+  echo "   may want to manually configure your PATH for this directory. The configuration"
   echo "   file will be created in the users home directory."
   echo
 

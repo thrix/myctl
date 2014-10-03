@@ -19,7 +19,7 @@ Currently the tool supports:
 
 ### Installation:
 
-To install the tool run the _install_ command.  The tool can be installed in two ways:
+To install the tool run the `install` command.  The tool can be installed in two ways:
 
 #### System-wide installation
 
@@ -32,9 +32,10 @@ type of installation.
 #### User installation
 
 This will install the tool only for current user. The tool will be installed in
-$HOME/bin/ directory. The directory will be created if it does not exist and it
-will be added to the PATH via .bashrc if you are running on bash. The configuration
+`$HOME/bin/` directory. The directory will be created if it does not exist and you
+may want to manually configure your PATH for this directory. The configuration
 file will be created in the users home directory.
+
 
 ### Configuration file
 
