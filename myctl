@@ -17,7 +17,7 @@
 #
 
 # globals
-VERSION="0.7"
+VERSION="0.80"
 TOOLNAME=$(basename $0)
 SYSTEM_CONFIG="/etc/$TOOLNAME.conf"
 USER_CONFIG="$HOME/.$TOOLNAME.conf"
@@ -125,6 +125,13 @@ check_db() {
   return $?
 }
 
+# check if user exits
+check_user() {
+   command_user_list | grep -q -- "^$1 "
+   return $?
+}
+
+
 #
 # general functions
 #
@@ -146,6 +153,7 @@ sanity_checks() {
   [ -z "$MYSQL_PASSWD" ] && exit_error "No MySQL admin password in configuration"
 
   # check mysql connection
+  is_myctl_installed || exit_error "Admin user credentials are wrong. Fix your configuration or run 'install' again."
 
   # check admin account requirements
 }
@@ -338,26 +346,46 @@ command_user_del() {
     exit_error "User $UNAME@$HOST does not exits"
 
   # check if any databases exists
-  [ -n "$DALL" ] && command_user_list "$UNAME@$HOST" | grep -q "-- none --" && \
+  [ -n "$DALL" ] && command_user_list "$UNAME@$HOST" | grep -q -- "-- none --" && \
     exit_error "No database exists for $UNAME@$HOST"
 
   # check if given databases exist for user
   if [ -n "$DBS" ]; then
-    IFS=','
-    for DB in $DBS; do
-      command_user_list "\b$UNAME@$HOST\b[[:space:]]+$DB" &>/dev/null || \
-        exit_error "Database $DB not found for $UNAME@$HOST"
+    for DB in $(sed 's/,/ /' <<< "$DBS"); do
+      command_user_list | egrep "\b$UNAME@$HOST\b.*\b$DB\b" &>/dev/null || \
+        exit_error "Database '$DB' not found for '$UNAME@$HOST'"
     done
-    unset IFS
   fi
 
   # ask for confirmation
-  confirm "Really remove MySQL user $UNAME@$HOST"
+  if [ -n "$DBS" ]; then
+    confirm "Really remove MySQL user '$UNAME@$HOST' and databases '$DBS'"
+  elif [ -n "$DALL" ]; then
+    confirm "Really remove MySQL user '$UNAME@$HOST' and all databases he has access to"
+  else
+    confirm "Really remove MySQL user '$UNAME@$HOST'"
+  fi
+
+  # remove given databases
+  if [ -n "$DBS" ]; then
+    for DB in $(sed 's/,/ /' <<< "$DBS"); do
+      mysql_exec "DROP DATABASE $DB" || print_error "Could not remove database $DB"
+      print_info "Removed database '$DB'"
+    done
+  fi
+
+  # remove all databases
+  if [ -n "$DALL" ]; then
+    for DB in $(command_user_list | grep "$UNAME@$HOST" | cut -d\  -f 2-); do
+      mysql_exec "DROP DATABASE $DB" || print_error "Could not remove database $DB"
+      print_info "Removed database '$DB'"
+    done
+  fi
 
   # delete user
   SQL="DROP USER '$UNAME'@'$HOST';"
   mysql_exec "$SQL" || exit_error "Adding user failed"
-  print_info "User $UNAME@$HOST removed"
+  print_info "User '$UNAME@$HOST' removed"
 
   exit 0
 }
@@ -458,7 +486,9 @@ command_db() {
   echo "Available sub-commands:"
   echo "  add      Add new database"
   echo "  del      Delete database"
-  echo "  dump     Dump database contents"
+  echo "  dump     Dump database contents to a file"
+  echo "  grant    Grant privileges to database or all databases"
+  echo "  revoke   Revoke privileges to a database or all databases"
   echo "  list     List databases"
   echo "  restore  Restore database from dump"
   echo
@@ -772,6 +802,65 @@ db_dump_help() {
 
   exit 0
 }
+
+## grant privilges
+command_db_grant() {
+  local OPTIND= UNAME= HOST=
+  local OPTS="h"
+
+  while getopts $OPTS arg; do
+    case $arg in
+      h)
+        db_grant_help
+        ;;
+      *)
+        exit 1
+        ;;
+    esac
+  done
+
+  shift $(($OPTIND-1))
+
+  # get positional params
+  IFS=@ read UNAME HOST <<< "$1"
+  [ -z "$HOST" ] && HOST="$DEF_HOST"
+  local DB=$2
+
+  # check if user exists
+  [ -z "$UNAME" ] && exit_error "No user specified" db_grant_help
+  check_user "$UNAME@$HOST" || exit_error "User $UNAME@$HOST does not exist"
+
+  if [ -n "$DB" ]; then
+    # check if db exitst
+    check_db "$DB" || exit_error "Database $DB does not exist"
+    # grant privilege for given db
+    SQL="GRANT ALL ON $DB.* TO '$UNAME'@'$HOST';"
+    mysql_exec "$SQL" || exit_error "Granting all privileges to database '$DB'"
+    print_info "Granted user '$UNAME@$HOST' all privileges to database '$DB'"
+  else
+    # ask for confirmation
+    confirm "Do you want to add privileges to all databases for user $UNAME@$HOST"
+    # grant privilege for all dbs
+    SQL="GRANT ALL ON *.* TO '$UNAME'@'$HOST';"
+    mysql_exec "$SQL" || exit_error "Granting all privileges to all databases for $UNAME@$HOST"
+    print_info "Granted user '$UNAME@$HOST' all privileges to all databases"
+  fi
+}
+
+db_grant_help() {
+  echo "Usage: $TOOLNAME db grant [options] user[@host] [database]"
+  echo
+  echo "Grant all privileges for given database to specified user. If host is"
+  echo "not specified - default host $DEF_HOST is used. If no database is specified"
+  echo "a user will be given access to all databases after confirmation."
+  echo
+  echo "Options:"
+  echo " -h          Show help"
+  echo
+
+  exit 0
+}
+
 
 #
 # shell
