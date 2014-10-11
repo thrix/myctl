@@ -17,7 +17,7 @@
 #
 
 # globals
-VERSION="0.80"
+VERSION="0.88"
 TOOLNAME=$(basename $0)
 SYSTEM_CONFIG="/etc/$TOOLNAME.conf"
 USER_CONFIG="$HOME/.$TOOLNAME.conf"
@@ -121,16 +121,58 @@ is_myctl_installed() {
 
 # check if database exists
 check_db() {
-  command_db_list | egrep -q -- "^$1 "
+  myctlsubcmd_db_list | egrep -q -- "^$1 "
   return $?
 }
 
 # check if user exits
 check_user() {
-   command_user_list | grep -q -- "^$1 "
+   myctlsubcmd_user_list | grep -q -- "^$1 "
    return $?
 }
 
+# check if user has privileges to given database
+check_user_db() {
+  myctlsubcmd_user_list | egrep -- "\b$1\b.*\b$2\b" &>/dev/null
+  return $?
+}
+
+check_user_db_none() {
+  myctlsubcmd_user_list "\b$1\b" | grep -q -- "-- none --"
+  return $?
+}
+
+# dispatch command - call specific subcommand for given command or show help
+dispatch_command() {
+  local CMD=$1
+  local SCMD=$2
+  local GEN= TMP=
+
+  # run subcommand if passed
+  if [ -n "$SCMD" ]; then
+    # execute given subcommand if found
+    GEN=$(compgen -A function myctlsubcmd_${CMD}_${SCMD})
+    if [ -n "$GEN" ]; then
+      if [ $(wc -l <<< "$GEN") -gt 1 ]; then
+        TMP=$(for TMP in $GEN; do echo -n "${TMP#myctlsubcmd_${CMD}_} "; done)
+        exit_error "More subcommands match \"$SCMD\": $TMP" myctlcmd_${CMD}
+      fi
+
+      # shift away subcommand
+      shift 2
+
+      # run subcommand
+      $GEN $@
+      return $?
+    fi
+
+    # if we got here there is no subcommand to run
+    exit_error "Unknown subcommand $SCMD"
+  else
+    # no command, display help
+    myctlcmd_${CMD}
+  fi
+}
 
 #
 # general functions
@@ -179,33 +221,38 @@ configuration file. Are you in $MYCTL_GROUP group?"
 show_help() {
   echo "Usage: $TOOLNAME [options] command [sub-command]"
   echo
-  echo "MySQL command line tool for managing users, databases and displaying"
-  echo "various useful information from MySQL database."
+  echo "Command line tool for managing users, databases and privileges"
+  echo "in one MySQL instance."
   echo
-  echo "Run command with -h parameter to get help."
+  echo "Run specific command with -h parameter to get help. Command abbreviations"
+  echo "accepted."
   echo
   echo "Available commands:"
   echo " db          Manage and list databases"
-  echo " install     Install $TOOLNAME tool"
+  echo " privilege   Manage user privileges to database"
   echo " shell       Get MySQL shell or execute SQL statement"
   echo " user        Manage and list users"
   echo
+  echo "Available installation commands"
+  echo " install     Install $TOOLNAME tool for current user or system-wide"
+  echo " uninstall   Uninstall $TOOLNAME tool"
   echo
   echo "Configuration file:"
   echo " The configuration file provides basic configuration for $TOOLNAME tool."
   echo " Global configuration file is located at \`$SYSTEM_CONFIG'. This can be"
-  echo " overriden by local configuration file \`~/.myctl.conf'. Configuration file"
-  echo " contains bash varibles sourced by the tool."
+  echo " overriden by local configuration file \`$USER_CONFIG'. Configuration"
+  echo " file contains bash varibles sourced by the tool. The configuration file"
+  echo " can be created manually or running the 'install' command."
   echo
   echo " Mandatory variables:"
-  echo " MYSQL_USER      - MySQL administrator username" 
-  echo " MYSQL_PASSWD    - MySQL administrator password" 
+  echo "  MYSQL_USER      - MySQL administrator username" 
+  echo "  MYSQL_PASSWD    - MySQL administrator password" 
   echo
   echo " Optional variables:"
-  echo " MYSQL_HOST      - MySQL hostname (default: localhost)" 
-  echo " MYSQL_PORT      - MySQL port (default: 3309)" 
-  echo " DEF_HOST        - Default host for adding user (default: localhost)"
-  echo " DEF_PASSWD      - Default password for added user (ask user if not present)"
+  echo "  MYSQL_HOST      - MySQL hostname (default: localhost)" 
+  echo "  MYSQL_PORT      - MySQL port (default: 3309)" 
+  echo "  DEF_HOST        - Default host for adding user (default: localhost)"
+  echo "  DEF_PASSWD      - Default password for added user (ask user if not present)"
   echo
   exit 0
 }
@@ -214,8 +261,8 @@ show_help() {
 # user management
 #
 
-## user command help
-command_user() {
+myctlcmd_user() {
+  # run help
   echo "Usage: $TOOLNAME user [sub-command] [options]"
   echo
   echo "Available sub-commands:"
@@ -230,7 +277,7 @@ command_user() {
 }
 
 ## add user
-command_user_add() {
+myctlsubcmd_user_add() {
   local OPTIND= DB= DUMP= PASSWD= UNAME=
   local PASSWD=$DEF_PASSWD
   local OPTS="hd:f:H:p:"
@@ -266,15 +313,13 @@ command_user_add() {
   [ -z "$HOST" ] && HOST=$DEF_HOST
 
   # check if user already exists
-  command_user_list "$UNAME@$HOST" &> /dev/null && \
-    exit_error "User $UNAME@$HOST already exists"
+  check_user && exit_error "User $UNAME@$HOST already exists"
 
   # check if database already exists
-  mysql_exec "show databases;" | egrep -q -- "^$DB$" && exit_error \
-    "Database $DB already exists, cannot create"
+  check_db && exit_error "Database $DB already exists, cannot create"
 
-  # check if 
 
+  # ask for password if needed
   while [ -z "$PASSWD" ]; do
     PASSWD=$(ask_user "Enter '$UNAME@$HOST' password")
   done
@@ -286,11 +331,11 @@ command_user_add() {
 
   # add database
   if [ -n "$DB" ]; then
-    command_db_add -u "$UNAME@$HOST" $DB
+    myctlsubcmd_db_add -u "$UNAME@$HOST" $DB
   fi
 
   # restore dump from given file
-  [ -n "$DUMP" ] && command_db_restore $DB $DUMP
+  [ -n "$DUMP" ] && myctlsubcmd_db_restore $DB $DUMP
 }
 
 user_add_help() {
@@ -311,7 +356,7 @@ user_add_help() {
 }
 
 ## delete user
-command_user_del() {
+myctlsubcmd_user_del() {
   local OPTIND= DBS= DALL= UNAME= HOST= DB=
   local OPTS="hDd:"
 
@@ -342,17 +387,15 @@ command_user_del() {
   [ -z "$HOST" ] && HOST=$DEF_HOST
 
   # check if user already exists
-  command_user_list "\b$UNAME@$HOST\b" &> /dev/null || \
-    exit_error "User $UNAME@$HOST does not exits"
+  check_user "$UNAME@$HOST" || exit_error "User $UNAME@$HOST does not exist"
 
   # check if any databases exists
-  [ -n "$DALL" ] && command_user_list "$UNAME@$HOST" | grep -q -- "-- none --" && \
-    exit_error "No database exists for $UNAME@$HOST"
+  [ -n "$DALL" ] && check_user_db_none && exit_error "No database exists for $UNAME@$HOST"
 
   # check if given databases exist for user
   if [ -n "$DBS" ]; then
     for DB in $(sed 's/,/ /' <<< "$DBS"); do
-      command_user_list | egrep "\b$UNAME@$HOST\b.*\b$DB\b" &>/dev/null || \
+      check_user_db "$UNAME@$HOST" "$DB" || \
         exit_error "Database '$DB' not found for '$UNAME@$HOST'"
     done
   fi
@@ -376,7 +419,7 @@ command_user_del() {
 
   # remove all databases
   if [ -n "$DALL" ]; then
-    for DB in $(command_user_list | grep "$UNAME@$HOST" | cut -d\  -f 2-); do
+    for DB in $(myctlsubcmd_user_list | grep "$UNAME@$HOST" | cut -d\  -f 2-); do
       mysql_exec "DROP DATABASE $DB" || print_error "Could not remove database $DB"
       print_info "Removed database '$DB'"
     done
@@ -384,7 +427,7 @@ command_user_del() {
 
   # delete user
   SQL="DROP USER '$UNAME'@'$HOST';"
-  mysql_exec "$SQL" || exit_error "Adding user failed"
+  mysql_exec "$SQL" || exit_error "Removing user failed"
   print_info "User '$UNAME@$HOST' removed"
 
   exit 0
@@ -405,8 +448,8 @@ user_del_help() {
 }
 
 ## list users
-command_user_list() {
-  local SQL= DATA= USER_HOST_DB= USR= HOST= DB= USRPREV= HOSTPREV= LIST=
+myctlsubcmd_user_list() {
+  local SQL= DATA= USER_HOST_DB= USR= HOST= DB= USRPREV= HOSTPREV= LIST= SPRIV=
   local FIRST= OPTIND=
   local OPTS="h"
 
@@ -423,14 +466,17 @@ command_user_list() {
 
   LIST=$(
     # get all users
-    SQL="use mysql; SELECT DISTINCT user.user, user.host, db.db FROM user \
+    SQL="use mysql; SELECT DISTINCT user.user, user.host, db.db, user.Select_priv FROM user \
       left JOIN db ON user.user=db.user ORDER BY user, host, db"
     DATA=$(mysql_exec "$SQL")
 
     # for all users, hosts print their databases
     while read USER_HOST_DB; do
-      read USR HOST DB <<< "$USER_HOST_DB"
-      [ "$DB" = "NULL" ] && DB="-- none --"
+      read USR HOST DB SPRIV <<< "$USER_HOST_DB"
+      if [ "$DB" = "NULL" ]; then
+        # Detect all privileges only by select privilege
+        [ "$SPRIV" = "Y" ] && DB="-- all --" || DB="-- none --"
+      fi
       if [ "$USR" = "$USRPREV" -a "$HOST" = "$HOSTPREV" ]; then
         echo -n "$DB "
         continue
@@ -478,7 +524,7 @@ user_list_help() {
 #
 
 ## db command help
-command_db() {
+myctlcmd_db() {
   echo "Usage: $TOOLNAME db [sub-command] [options]"
   echo
   echo "MySQL database management."
@@ -499,7 +545,7 @@ command_db() {
 }
 
 ## list all databases
-command_db_list() {
+myctlsubcmd_db_list() {
   local DB= PRIV=
   local DBS=$(mysql_exec "show databases" | egrep -v "$DB_IGNORE_LIST" | sort | egrep -- "$1")
   local PRIVS=$(mysql_exec "SELECT db,user,host FROM mysql.db" | awk '{print $1,$2"@"$3}') 
@@ -546,9 +592,7 @@ db_list_help() {
 }
 
 ## remove database
-command_db_delete() { command_db_del $@; }
-command_db_remove() { command_db_del $@; }
-command_db_del() {
+myctlsubcmd_db_del() {
   local OPTS="h"
 
   while getopts $OPTS arg; do
@@ -592,8 +636,7 @@ db_del_help() {
 }
 
 ## add database
-command_db_create() { command_db_add $@; }
-command_db_add() {
+myctlsubcmd_db_add() {
   local USRS= USR= UNAME= HOST= OPTIND=
   local OPTS="hu:f:"
 
@@ -632,8 +675,7 @@ command_db_add() {
     for USR in $USRS; do
       echo $USR | egrep -q -- ".+@.+" || exit_error \
         "User $USR has not form user@host"
-      command_user_list | grep -q "$USR" || \
-        exit_error "User $USR does not exist"
+      check_user "$USR" || exit_error "User $USR does not exist"
     done
   fi
 
@@ -653,7 +695,7 @@ command_db_add() {
   fi
 
   # restore dump from given file
-  [ -n "$DUMP" ] && command_db_restore $DB $DUMP
+  [ -n "$DUMP" ] && myctlsubcmd_db_restore $DB $DUMP
 }
 
 db_add_help() {
@@ -670,8 +712,7 @@ db_add_help() {
 }
 
 ## restore database
-command_db_res() { command_db_restore $@; }
-command_db_restore() {
+myctlsubcmd_db_restore() {
   local OPTIND= REMOVE= FILEINFO=
   local OPTS="hr"
 
@@ -741,7 +782,7 @@ db_restore_help() {
 }
 
 ## dump database
-command_db_dump() {
+myctlsubcmd_db_dump() {
   local OPTIND=
   local COMPRESS="gzip"
   local SUFFIX="sql.gz"
@@ -803,15 +844,42 @@ db_dump_help() {
   exit 0
 }
 
-## grant privilges
-command_db_grant() {
+
+#
+# provilege management
+#
+
+## privilege command help
+myctlcmd_privilege() {
+  echo "Usage: $TOOLNAME privilage [sub-command] [options]"
+  echo
+  echo "Privilege management."
+  echo
+  echo "Available sub-commands:"
+  echo "  grant    Grant all privileges for a user on an existing database"
+  echo "  list     List users with privileges to databases (equal to 'user list')"
+  echo "  revoke   Revoke all privileges for a user on a given database"
+  echo
+  echo "Run sub-command with -h parameter to get detailed help."
+  echo
+
+  exit 0
+}
+
+## list users with privileges
+myctlsubcmd_privilege_list() {
+  myctlsubcmd_user_list $@
+}
+
+## grant privileges
+myctlsubcmd_privilege_grant() {
   local OPTIND= UNAME= HOST=
   local OPTS="h"
 
   while getopts $OPTS arg; do
     case $arg in
       h)
-        db_grant_help
+        privilege_grant_help
         ;;
       *)
         exit 1
@@ -827,7 +895,7 @@ command_db_grant() {
   local DB=$2
 
   # check if user exists
-  [ -z "$UNAME" ] && exit_error "No user specified" db_grant_help
+  [ -z "$UNAME" ] && exit_error "No user specified" privilege_grant_help
   check_user "$UNAME@$HOST" || exit_error "User $UNAME@$HOST does not exist"
 
   if [ -n "$DB" ]; then
@@ -847,8 +915,8 @@ command_db_grant() {
   fi
 }
 
-db_grant_help() {
-  echo "Usage: $TOOLNAME db grant [options] user[@host] [database]"
+privilege_grant_help() {
+  echo "Usage: $TOOLNAME privilege grant [options] user[@host] [database]"
   echo
   echo "Grant all privileges for given database to specified user. If host is"
   echo "not specified - default host $DEF_HOST is used. If no database is specified"
@@ -861,14 +929,77 @@ db_grant_help() {
   exit 0
 }
 
+## revoke privileges
+myctlsubcmd_privilege_revoke() {
+  local OPTIND= UNAME= HOST=
+  local OPTS="h"
+
+  while getopts $OPTS arg; do
+    case $arg in
+      h)
+        privilege_revoke_help
+        ;;
+      *)
+        exit 1
+        ;;
+    esac
+  done
+
+  shift $(($OPTIND-1))
+
+  # get positional params
+  IFS=@ read UNAME HOST <<< "$1"
+  [ -z "$HOST" ] && HOST="$DEF_HOST"
+  local DB=$2
+
+  # check if user exists
+  [ -z "$UNAME" ] && exit_error "No user specified" privilege_grant_help
+  check_user "$UNAME@$HOST" || exit_error "User $UNAME@$HOST does not exist"
+
+  if [ -n "$DB" ]; then
+    # check if db exitst
+    check_db "$DB" || exit_error "Database $DB does not exist"
+    # check if user already has privileges
+    check_user_db "$UNAME@$HOST" "$DB" && exit_error \
+      "User '$UNAME@$HOST' has no privileges to database '$DB'"
+    # grant privilege for given db
+    SQL="REVOKE ALL ON $DB.* FROM '$UNAME'@'$HOST';"
+    mysql_exec "$SQL" || exit_error "Revoking all privileges from database '$DB'"
+    print_info "Revoked all privileges from user '$UNAME@$HOST' to database '$DB'"
+  else
+    # check if user has some privileges
+    check_user_db_none "$UNAME@$HOST" && exit_error \
+      "User '$UNAME@$HOST' has no privileges"
+    # ask for confirmation
+    confirm "Do you want to revoke privileges to all databases from user $UNAME@$HOST"
+    # grant privilege for all dbs
+    SQL="REVOKE ALL PRIVILEGES, GRANT OPTION FROM '$UNAME'@'$HOST';"
+    mysql_exec "$SQL" || exit_error "Revoking all privileges to all databases for $UNAME@$HOST"
+    print_info "Revoked all privileges from user '$UNAME@$HOST' to all databases"
+  fi
+}
+
+privilege_revoke_help() {
+  echo "Usage: $TOOLNAME privilege revoke [options] user[@host] [database]"
+  echo
+  echo "Revoke all privileges for given database to specified user. If host is"
+  echo "not specified - default host $DEF_HOST is used. If no database is specified"
+  echo "a user will be revoked access to all databases after confirmation."
+  echo
+  echo "Options:"
+  echo " -h          Show help"
+  echo
+
+  exit 0
+}
 
 #
 # shell
 #
-command_shell() {
+myctlcmd_shell() {
   local OPTS="hnd:" OPTIND=
   local MEXEC="mysql_exec"
-  local MOPTS=""
+  local MOPTS=
 
   while getopts $OPTS arg; do
     case $arg in
@@ -891,15 +1022,15 @@ command_shell() {
   # check if db exists
   if [ -n "$DB" ]; then
     check_db $DB || exit_error "Database '$DB' does not exist"
-    MEXEC="MYSQL_OPTS=\"$MOPTS\" mysql_exec_db $DB"
+    MEXEC="mysql_exec_db $DB"
+  fi
+
+  if [ -n "$MOPTS" ]; then
+      export MYSQL_OPTS="$MOPTS"
   fi
 
   # run the shell
-  if [ -z "$SUBCOMMAND" ]; then
-    MYSQL_OPTS="$MOPTS" $MEXEC
-  else
-    MYSQL_OPTS="$MOPTS" $MEXEC "$@"
-  fi
+  [ -z "$1" ] && $MEXEC || $MEXEC "$@"
 
   return $?
 }
@@ -1033,13 +1164,12 @@ to this group to be able to use it."
   print_info "System installation finished successfully. Enjoy!"
 }
 
-command_install() {
-  local IMETHOD
+myctlcmd_install() {
+  local IMETHOD=
 
-  is_myctl_installed && exit_info "Tool is already installed and configure correctly"
+  is_myctl_installed && exit_info "Tool is already installed and configured correctly. Run uninstall to remove."
 
-  echo "You are about to install and configure MySQL command line tool ($TOOLNAME)"
-  echo "on your system."
+  echo "You are about to install and configure $TOOLANME - MySQL command line tool - on your system."
   echo
   confirm "Do you want to continue"
   echo
@@ -1072,11 +1202,49 @@ command_install() {
       exit_error "Installation cancelled."
       ;;
     *)
-      exit_error "Uknown choice '$IMETHOD'. Cowardly exiting ..."
+      exit_error "Unknown choice '$IMETHOD'. Cowardly exiting ..."
       ;;
   esac
 }
 
+#
+# install
+#
+myctlcmd_uninstall() {
+  is_myctl_installed || exit_error "Tool is not installed, cannot unistall"
+
+  echo "You are about to uninstall '$TOOLNAME' from you system."
+  echo
+  echo "If you are running this tool as root, it will remove the system-wide configuration"
+  echo "and root user configuration from ~/.$TOOLNAME.conf. Also $TOOLNAME script will be removed"
+  echo "from the system."
+  echo
+  echo "If you are running this tool a non-root user - only the user configuration will"
+  echo "be removed from ~/.$TOOLNAME.conf. Also the tools will be removed from ~/bin/ folder."
+  echo
+  confirm "Do you want to continue?"
+  echo
+  if [ $(id -u) -eq 0 ]; then
+    if [ -e "$SYSTEM_CONFIG" ]; then
+      rm -f "$SYSTEM_CONFIG"
+      print_info "Removed system-wide configuration"
+    fi
+    if which $TOOLNAME &> /dev/null; then
+      rm -f $(which myctl)
+      print_info "Removed $TOOLNAME from system"
+    fi
+  fi
+
+  if [ -e "$USER_CONFIG" ]; then
+      rm -f "$USER_CONFIG"
+      print_info "Removed user configuration"
+  fi
+
+  if [ -e "$HOME/bin/$TOOLNAME" ]; then
+    rm -f "$HOME/bin/$TOOLNAME"
+    print_info "Removed myctl tool from $HOME/bin/"
+  fi
+}
 
 #
 # Main
@@ -1104,7 +1272,6 @@ done
 shift $((OPTIND-1))
 
 [ -n "$1" ] && COMMAND=$1 || show_help
-SUBCOMMAND=$2
 
 # load configuration
 load_config
@@ -1112,15 +1279,23 @@ load_config
 # sanity checks
 [ "$COMMAND" != "install" ] && sanity_checks
 
-# shift away command and sub-command
-shift 2
+# shift away command
+shift 1
 
 # execute give command specific function
-if [ "$(type -t command_${COMMAND}_${SUBCOMMAND})" = function ]; then 
-  command_${COMMAND}_${SUBCOMMAND} $@
-  exit $?
-elif [ "$(type -t command_${COMMAND})" = function ]; then
-  command_$COMMAND $SUBCOMMAND $@
+GEN=$(compgen -A function myctlcmd_$COMMAND)
+if [ -n "$GEN" ]; then
+  if [ $(wc -l <<< "$GEN") -gt 1 ]; then
+    TMP=$(for TMP in $GEN; do echo -n "${TMP#myctlcmd_${COMMAND}_} "; done)
+    exit_error "More commands match \"$COMMAND\": $TMP" show_help
+  fi
+
+  # shell command has no subcommands and accepts some params
+  if [ "$COMMAND" == "shell" ]; then
+    myctlcmd_${COMMAND} $@
+  else
+    dispatch_command ${GEN#myctlcmd_} $@
+  fi
   exit $?
 fi
 
