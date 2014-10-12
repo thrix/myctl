@@ -17,7 +17,7 @@
 #
 
 # globals
-VERSION="0.88"
+VERSION="0.95"
 TOOLNAME=$(basename $0)
 SYSTEM_CONFIG="/etc/$TOOLNAME.conf"
 USER_CONFIG="$HOME/.$TOOLNAME.conf"
@@ -27,7 +27,8 @@ MYSQL_HOST="localhost"
 MYSQL_PORT="3306"
 DEF_HOST="localhost"
 MYSQL_OPTS="--skip-column-names" # by default do not show column names
-MYCTL_GROUP="myctl"
+[ -e "$SYSTEM_CONFIG" ] && MYCTL_GROUP="$(stat -c '%G' $SYSTEM_CONFIG)" || \
+  MYCTL_GROUP="myctl"
 DB_IGNORE_LIST="^(mysql|performance_schema|information_schema)$" # ignore these dbs in listing
 
 #
@@ -278,7 +279,7 @@ myctlcmd_user() {
 
 ## add user
 myctlsubcmd_user_add() {
-  local OPTIND= DB= DUMP= PASSWD= UNAME=
+  local OPTIND= DB= DUMP= PASSWD= UNAME= DBS=
   local PASSWD=$DEF_PASSWD
   local OPTS="hd:f:H:p:"
 
@@ -288,7 +289,7 @@ myctlsubcmd_user_add() {
         user_add_help
         ;;
       d)
-        DB=$OPTARG
+        DBS=$OPTARG
         ;;
       f)
         DUMP=$OPTARG
@@ -302,22 +303,25 @@ myctlsubcmd_user_add() {
     esac
   done
 
-  shift $(($OPTIND-1))
+  shift $((OPTIND-1))
 
   [ -z "$1" ] && exit_error "No username given" user_add_help
   [ $# -ne 1 ] && exit_error "Too many parameters" user_add_help
-  [ -n "$DUMP" -a -z "$DB" ] && exit_error "No database given. Option -f requires -d" user_add_help
+  [ -n "$DUMP" -a -z "$DBS" ] && exit_error "No database given. Option -f requires -d" user_add_help
   [ -n "$DUMP" -a ! -e "$DUMP" ] && exit_error "Dump file '$DUMP' not found"
 
   IFS=@ read UNAME HOST <<< "$1"
   [ -z "$HOST" ] && HOST=$DEF_HOST
 
   # check if user already exists
-  check_user && exit_error "User $UNAME@$HOST already exists"
+  check_user $UNAME@$HOST && exit_error "User $UNAME@$HOST already exists"
 
   # check if database already exists
-  check_db && exit_error "Database $DB already exists, cannot create"
-
+  if [ -n "$DBS" ]; then
+    for DB in $(sed 's/,/ /g' <<< "$DBS"); do
+      check_db $DB && exit_error "Database $DB already exists, cannot create"
+    done
+  fi
 
   # ask for password if needed
   while [ -z "$PASSWD" ]; do
@@ -330,22 +334,23 @@ myctlsubcmd_user_add() {
   print_info "Created user '$UNAME@$HOST' with password '$PASSWD'"
 
   # add database
-  if [ -n "$DB" ]; then
-    myctlsubcmd_db_add -u "$UNAME@$HOST" $DB
+  if [ -n "$DBS" ]; then
+    for DB in $(sed 's/,/ /g' <<< "$DBS"); do
+      myctlsubcmd_db_add -u "$UNAME@$HOST" "$DB"
+      # restore dump from given file
+      [ -n "$DUMP" ] && myctlsubcmd_db_restore $DB $DUMP
+    done
   fi
-
-  # restore dump from given file
-  [ -n "$DUMP" ] && myctlsubcmd_db_restore $DB $DUMP
 }
 
 user_add_help() {
-  echo "Usage: $TOOLNAME user add [-d database] [-f dump] [-H host] [-p password] user[@host]"
+  echo "Usage: $TOOLNAME user add [-d db,..] [-f dump] [-H host] [-p password] user[@host]"
   echo
   echo "Add new MySQL user who can connect from $DEF_HOST. Optionally specify other host, "
   echo "add also a new database and restore a MySQL dump from file."
   echo
   echo "Options:"
-  echo " -d database       Create a user database with given name"
+  echo " -d db,..          Create one or more user database separated with commas"
   echo " -f dump           Restore given dump to the database, requires -d"
   echo " -H host           Host user can authenticate from (default: $DEF_HOST)"
   echo " -p password       Use given password for user \
@@ -377,7 +382,7 @@ myctlsubcmd_user_del() {
     esac
   done
 
-  shift $(($OPTIND-1))
+  shift $((OPTIND-1))
 
   [ -z "$1" ] && exit_error "No username given" user_del_help
   [ -n "$DBS" -a -n "$DALL" ] && exit_error \
@@ -394,7 +399,7 @@ myctlsubcmd_user_del() {
 
   # check if given databases exist for user
   if [ -n "$DBS" ]; then
-    for DB in $(sed 's/,/ /' <<< "$DBS"); do
+    for DB in $(sed 's/,/ /g' <<< "$DBS"); do
       check_user_db "$UNAME@$HOST" "$DB" || \
         exit_error "Database '$DB' not found for '$UNAME@$HOST'"
     done
@@ -411,7 +416,7 @@ myctlsubcmd_user_del() {
 
   # remove given databases
   if [ -n "$DBS" ]; then
-    for DB in $(sed 's/,/ /' <<< "$DBS"); do
+    for DB in $(sed 's/,/ /g' <<< "$DBS"); do
       mysql_exec "DROP DATABASE $DB" || print_error "Could not remove database $DB"
       print_info "Removed database '$DB'"
     done
@@ -467,7 +472,7 @@ myctlsubcmd_user_list() {
   LIST=$(
     # get all users
     SQL="use mysql; SELECT DISTINCT user.user, user.host, db.db, user.Select_priv FROM user \
-      left JOIN db ON user.user=db.user ORDER BY user, host, db"
+      left JOIN db ON user.user=db.user AND user.host=db.host ORDER BY user, host, db"
     DATA=$(mysql_exec "$SQL")
 
     # for all users, hosts print their databases
@@ -476,14 +481,19 @@ myctlsubcmd_user_list() {
       if [ "$DB" = "NULL" ]; then
         # Detect all privileges only by select privilege
         [ "$SPRIV" = "Y" ] && DB="-- all --" || DB="-- none --"
+      else
+        [ "$SPRIV" = "Y" ] && DB="-- all -- $DB"
       fi
       if [ "$USR" = "$USRPREV" -a "$HOST" = "$HOSTPREV" ]; then
         echo -n "$DB "
         continue
       fi
 
-      [ -z "$FIRST" ] && printf "%-40s%s" "$USR@$HOST" "$DB" || \
+      if  [ -z "$FIRST" ]; then
+        printf "%-40s%s" "$USR@$HOST" "$DB"
+      else
         printf "\n%-40s%s" "$USR@$HOST" "$DB "
+      fi
 
       USRPREV=$USR
       HOSTPREV=$HOST
@@ -533,8 +543,6 @@ myctlcmd_db() {
   echo "  add      Add new database"
   echo "  del      Delete database"
   echo "  dump     Dump database contents to a file"
-  echo "  grant    Grant privileges to database or all databases"
-  echo "  revoke   Revoke privileges to a database or all databases"
   echo "  list     List databases"
   echo "  restore  Restore database from dump"
   echo
@@ -546,10 +554,25 @@ myctlcmd_db() {
 
 ## list all databases
 myctlsubcmd_db_list() {
-  local DB= PRIV=
+  local DB= PRIV= OPTIND=
+  local COUNT=0
+  local OPTS="h"
+
+  while getopts $OPTS arg; do
+    case $arg in
+      h)
+        db_list_help
+        ;;
+      *)
+        exit 1
+        ;;
+    esac
+  done
+
+  shift $((OPTIND-1))
+
   local DBS=$(mysql_exec "show databases" | egrep -v "$DB_IGNORE_LIST" | sort | egrep -- "$1")
   local PRIVS=$(mysql_exec "SELECT db,user,host FROM mysql.db" | awk '{print $1,$2"@"$3}') 
-  local COUNT=0
 
   if [ -z "$DBS" ]; then
     echo "No database found"
@@ -593,7 +616,7 @@ db_list_help() {
 
 ## remove database
 myctlsubcmd_db_del() {
-  local OPTS="h"
+  local OPTS="h" OPTIND=
 
   while getopts $OPTS arg; do
     case $arg in
@@ -606,7 +629,7 @@ myctlsubcmd_db_del() {
     esac
   done
 
-  shift $(($OPTIND-1))
+  shift $((OPTIND-1))
 
   # get positional param
   local DB=$1
@@ -637,7 +660,7 @@ db_del_help() {
 
 ## add database
 myctlsubcmd_db_add() {
-  local USRS= USR= UNAME= HOST= OPTIND=
+  local USRS= USR= UNAME= HOST= OPTIND= DUMP=
   local OPTS="hu:f:"
 
   while getopts $OPTS arg; do
@@ -646,7 +669,7 @@ myctlsubcmd_db_add() {
         db_add_help
         ;;
       u)
-        USRS="$USRS $OPTARG"
+        USRS="$(sed 's/,/ /g' <<< "$OPTARG")"
         ;;
       f)
         DUMP=$OPTARG
@@ -657,7 +680,7 @@ myctlsubcmd_db_add() {
     esac
   done
 
-  shift $(($OPTIND-1))
+  shift $((OPTIND-1))
 
   # get positional param
   local DB=$1
@@ -673,8 +696,7 @@ myctlsubcmd_db_add() {
   # check if given users exist
   if [ -n "$USRS" ]; then
     for USR in $USRS; do
-      echo $USR | egrep -q -- ".+@.+" || exit_error \
-        "User $USR has not form user@host"
+      echo $USR | egrep -q -- ".+@.+" || USR="$USR@$DEF_HOST"
       check_user "$USR" || exit_error "User $USR does not exist"
     done
   fi
@@ -687,6 +709,7 @@ myctlsubcmd_db_add() {
   # grant all privileges to users
   if [ -n "$USRS" ]; then
     for USR in $USRS; do
+      echo $USR | egrep -q -- ".+@.+" || USR="$USR@$DEF_HOST"
       IFS=@ read UNAME HOST <<< "$USR"
       SQL="GRANT ALL ON $DB.* TO '$UNAME'@'$HOST';"
       mysql_exec "$SQL" || exit_error "Granting all privileges to database '$DB'"
@@ -702,10 +725,11 @@ db_add_help() {
   echo "Usage: $TOOLNAME db add [options] DATABASE"
   echo
   echo "Add new database. Optionally grant all privileges for given existing user or more users."
+  echo "If user has no host information, the default host is used."
   echo
   echo "Options:"
   echo " -f dump          Restore given dump to the database"
-  echo " -u user@host     Grant all privileges for given users, can be specified multiple times"
+  echo " -u user@host,..  Grant all privileges for given users separated by commas"
   echo
 
   exit 0
@@ -730,7 +754,7 @@ myctlsubcmd_db_restore() {
     esac
   done
 
-  shift $(($OPTIND-1))
+  shift $((OPTIND-1))
 
   # get positional params
   local DB=$1
@@ -803,7 +827,7 @@ myctlsubcmd_db_dump() {
     esac
   done
 
-  shift $(($OPTIND-1))
+  shift $((OPTIND-1))
 
   # get positional params
   local DB=$1
@@ -887,7 +911,7 @@ myctlsubcmd_privilege_grant() {
     esac
   done
 
-  shift $(($OPTIND-1))
+  shift $((OPTIND-1))
 
   # get positional params
   IFS=@ read UNAME HOST <<< "$1"
@@ -945,7 +969,7 @@ myctlsubcmd_privilege_revoke() {
     esac
   done
 
-  shift $(($OPTIND-1))
+  shift $((OPTIND-1))
 
   # get positional params
   IFS=@ read UNAME HOST <<< "$1"
@@ -960,7 +984,7 @@ myctlsubcmd_privilege_revoke() {
     # check if db exitst
     check_db "$DB" || exit_error "Database $DB does not exist"
     # check if user already has privileges
-    check_user_db "$UNAME@$HOST" "$DB" && exit_error \
+    check_user_db "$UNAME@$HOST" "$DB" || exit_error \
       "User '$UNAME@$HOST' has no privileges to database '$DB'"
     # grant privilege for given db
     SQL="REVOKE ALL ON $DB.* FROM '$UNAME'@'$HOST';"
@@ -1017,7 +1041,7 @@ myctlcmd_shell() {
         ;;
     esac
   done
-  shift $(($OPTIND-1))
+  shift $((OPTIND-1))
 
   # check if db exists
   if [ -n "$DB" ]; then
@@ -1149,12 +1173,18 @@ install_system() {
   echo
   write_config $SYSTEM_CONFIG
 
+  # ask for myctl group
+  MYCTL_GROUP=$(ask_user "Enter $TOOLNAME group that will be needed for using the tool" \
+    "$MYCTL_GROUP")
+
   # create myctl group
   if ! getent group $MYCTL_GROUP &> /dev/null; then
     groupadd $MYCTL_GROUP
-  fi
-  print_info "Group '$MYCTL_GROUP' created. You need to add myctl users \
+    print_info "Group '$MYCTL_GROUP' created. You need to add myctl users \
 to this group to be able to use it."
+  else
+    print_info "Group '$MYCTL_GROUP' already exists, skipping creation ..."
+  fi
   chmod 640 $SYSTEM_CONFIG
   chown root:$MYCTL_GROUP $SYSTEM_CONFIG
 
@@ -1167,7 +1197,8 @@ to this group to be able to use it."
 myctlcmd_install() {
   local IMETHOD=
 
-  is_myctl_installed && exit_info "Tool is already installed and configured correctly. Run uninstall to remove."
+  is_myctl_installed && exit_info \
+    "Tool is already installed and configured correctly. Run 'uninstall' command to remove."
 
   echo "You are about to install and configure $TOOLANME - MySQL command line tool - on your system."
   echo
@@ -1211,6 +1242,8 @@ myctlcmd_install() {
 # install
 #
 myctlcmd_uninstall() {
+  local GROUP= ANSW=
+
   is_myctl_installed || exit_error "Tool is not installed, cannot unistall"
 
   echo "You are about to uninstall '$TOOLNAME' from you system."
@@ -1226,6 +1259,15 @@ myctlcmd_uninstall() {
   echo
   if [ $(id -u) -eq 0 ]; then
     if [ -e "$SYSTEM_CONFIG" ]; then
+      # get group of system config file
+      GROUP=$(stat -c '%G' $SYSTEM_CONFIG)
+      ANSW=$(ask_user "Remove $TOOLNAME group '$GROUP' (y/n)?")
+      if [ "$ANSW" = "y" ]; then
+        groupdel $GROUP || print_error "Removing group '$GROUP'" && \
+          print_info "Removed group '$GROUP'"
+      else
+        print_info "Skipping removal of group '$GROUP'"
+      fi
       rm -f "$SYSTEM_CONFIG"
       print_info "Removed system-wide configuration"
     fi
@@ -1286,7 +1328,7 @@ shift 1
 GEN=$(compgen -A function myctlcmd_$COMMAND)
 if [ -n "$GEN" ]; then
   if [ $(wc -l <<< "$GEN") -gt 1 ]; then
-    TMP=$(for TMP in $GEN; do echo -n "${TMP#myctlcmd_${COMMAND}_} "; done)
+    TMP=$(for TMP in $GEN; do echo -n "${TMP#myctlcmd_} "; done)
     exit_error "More commands match \"$COMMAND\": $TMP" show_help
   fi
 
