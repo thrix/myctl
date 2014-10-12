@@ -17,7 +17,7 @@
 #
 
 # globals
-VERSION="0.95"
+VERSION="1.00"
 TOOLNAME=$(basename $0)
 SYSTEM_CONFIG="/etc/$TOOLNAME.conf"
 USER_CONFIG="$HOME/.$TOOLNAME.conf"
@@ -481,8 +481,6 @@ myctlsubcmd_user_list() {
       if [ "$DB" = "NULL" ]; then
         # Detect all privileges only by select privilege
         [ "$SPRIV" = "Y" ] && DB="-- all --" || DB="-- none --"
-      else
-        [ "$SPRIV" = "Y" ] && DB="-- all -- $DB"
       fi
       if [ "$USR" = "$USRPREV" -a "$HOST" = "$HOSTPREV" ]; then
         echo -n "$DB "
