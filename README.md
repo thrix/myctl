@@ -40,6 +40,10 @@ To install the tool run the `install` command. This will ask you for some
 details and install the tool to the system. The tool can be installed
 in two ways - system-wide or for current user.
 
+```
+$ myctl install
+```
+
 To uninstall the tool from the system run the `uninstall` command.
 
 #### System-wide installation
