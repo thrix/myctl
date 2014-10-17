@@ -17,7 +17,7 @@
 #
 
 # globals
-VERSION="1.00"
+VERSION="1.05"
 TOOLNAME=$(basename $0)
 SYSTEM_CONFIG="/etc/$TOOLNAME.conf"
 USER_CONFIG="$HOME/.$TOOLNAME.conf"
@@ -508,7 +508,7 @@ myctlsubcmd_user_list() {
     printf "%-40s%s\n" "User@Server" "Privileges to database(s)"
     printf "%80s\n" | tr ' ' -
     echo "$LIST"
-  } | less -F
+  } | less -FX
 }
 
 user_list_help() {
@@ -518,7 +518,7 @@ user_list_help() {
   echo "Currently the privileges are not distinguished and if user"
   echo "has at least one permission it is shown."
   echo
-  echo "Optionally a regular expressoin can be passwd to filter out results."
+  echo "Optionally a regular expression can be passwd to filter out results."
   echo "This REGEXP is passed to egrep directly."
   echo
   echo "Listed results are paged via less."
@@ -595,7 +595,7 @@ myctlsubcmd_db_list() {
       done
       echo
     done
-  } | less -F
+  } | less -FX
 }
 
 db_list_help() {

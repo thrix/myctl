@@ -65,7 +65,7 @@ file will be created in the users home directory.
 
 The configuration file provides basic configuration for myctl tool.
 Global configuration file is located at `/etc/myctl.conf`. This can be
-overriden by local configuration file `~/.myctl.conf`. Configuration files
+overridden by local configuration file `~/.myctl.conf`. Configuration files
 are consisted from bash variables. The configuration file will be created
 by the `install` command, but can be also created manually. To verify
 the correct installation run the `install` command, which should in this
@@ -267,7 +267,7 @@ $ myctl db dump sampledb
 :: Dumped database 'sampledb' to 'sampledb-20141012_21-38.sql.gz'
 ```
 
-To dump to a specific file pass the filenmae after the database name
+To dump to a specific file pass the filename after the database name
 ```
 $ myctl db dump sampledb mydump.gz
 :: Dumped database 'sampledb' to 'mydump.gz'
@@ -280,7 +280,7 @@ saved as raw SQL.
 #### Restoring database
 To restore database dump to an existing database use the `restore`
 command from the `db` management space. The compression format is
-autodetected with the file(1) command.
+auto-detected with the file(1) command.
 
 ```
 $ myctl db restore sampledb sqldump 
@@ -347,15 +347,15 @@ Do you want to revoke privileges to all databases from user dbuser@10.0.0.1 (y/n
 ```
 
 #### Get MySQL shell or run SQL query
-With the `shell` subcommand you can get an admin MySQL shell.
+With the `shell` command you can get an admin MySQL shell.
 
 ```
-myctl shell
+$ myctl shell
 ```
 
 You can also execute any SQL statement you like, optionally in a context
 of a given database using the `-d` option.
 ```
 # run a SELECT query on database sampledb
-myctl shell -d sampledb 'SELECT * from sampletable'
+$ myctl shell -d sampledb 'SELECT * from sampletable'
 ```
