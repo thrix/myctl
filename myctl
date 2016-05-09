@@ -1,6 +1,6 @@
 #!/bin/bash -f
 #
-# Copyright (C) 2014 Miroslav Vadkerti
+# Copyright (C) 2014,2016 Miroslav Vadkerti
 # This program is free software: you can redistribute it and/or modify it under
 # the terms of the GNU General Public License as published by the Free Software
 # Foundation, either version 3 of the License, or (at your option) any later
@@ -13,11 +13,11 @@
 # You should have received a copy of the GNU General Public License along
 # with this program. If not, see http://www.gnu.org/licenses/. 
 #
-# Author: Miroslav Vadkerti <miro.vadkerti at mogdesign.eu>
+# Author: Miroslav Vadkerti <thrix AT vadkerti.net>
 #
 
 # globals
-VERSION="1.05"
+VERSION="1.06"
 TOOLNAME=$(basename $0)
 SYSTEM_CONFIG="/etc/$TOOLNAME.conf"
 USER_CONFIG="$HOME/.$TOOLNAME.conf"
@@ -1089,6 +1089,8 @@ install_get_env() {
   while [ $RET -ne 0 ]; do
     MYSQL_USER=$(ask_user "Enter MySQL admin username")
     MYSQL_PASSWD=$(ask_user "Enter MySQL admin password")
+    MYSQL_HOST=$(ask_user "MySQL host" "localhost")
+    MYSQL_PORT=$(ask_user "MySQL port" "3306")
     mysql_exec "exit" >/dev/null; RET=$?
     if [ $RET -eq 0 ]; then
       # TODO check if user admin
@@ -1098,8 +1100,6 @@ install_get_env() {
     fi
   done
 
-  MYSQL_HOST=$(ask_user "MySQL host" "localhost")
-  MYSQL_PORT=$(ask_user "MySQL port" "3306")
   DEF_HOST=$(ask_user "Default host for new user" "localhost")
   DEF_PASSWD=$(ask_user "Default password for new user" "ask for password")
   [ "$DEF_PASSWD" == "ask for password" ] && DEF_PASSWD=
