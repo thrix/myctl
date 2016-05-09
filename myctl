@@ -643,7 +643,7 @@ myctlsubcmd_db_del() {
   confirm "Really remove MySQL database $DB"
 
   # remove database
-  mysql_exec "DROP DATABASE $DB"
+  command_shell "DROP DATABASE \`$DB\`"
   print_info "Database $DB removed"
 }
 
