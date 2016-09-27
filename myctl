@@ -1,6 +1,7 @@
 #!/bin/bash -f
 #
-# Copyright (C) 2014,2016 Miroslav Vadkerti
+# Copyright (C) 2014-2016 Miroslav Vadkerti <thrix AT vadkerti.net>
+#
 # This program is free software: you can redistribute it and/or modify it under
 # the terms of the GNU General Public License as published by the Free Software
 # Foundation, either version 3 of the License, or (at your option) any later
@@ -13,11 +14,9 @@
 # You should have received a copy of the GNU General Public License along
 # with this program. If not, see http://www.gnu.org/licenses/. 
 #
-# Author: Miroslav Vadkerti <thrix AT vadkerti.net>
-#
 
 # globals
-VERSION="1.06"
+VERSION="1.1"
 TOOLNAME=$(basename $0)
 SYSTEM_CONFIG="/etc/$TOOLNAME.conf"
 USER_CONFIG="$HOME/.$TOOLNAME.conf"
@@ -29,17 +28,18 @@ DEF_HOST="localhost"
 MYSQL_OPTS="--skip-column-names" # by default do not show column names
 [ -e "$SYSTEM_CONFIG" ] && MYCTL_GROUP="$(stat -c '%G' $SYSTEM_CONFIG)" || \
   MYCTL_GROUP="myctl"
-DB_IGNORE_LIST="^(mysql|performance_schema|information_schema)$" # ignore these dbs in listing
+DB_IGNORE_LIST="^(performance_schema|information_schema)$" # ignore these dbs in listing
 
 #
 # helpers
 #
 print_info() {
+  [ -n "$QUIET" ] && return
   echo ":: $1"
 }
 
 print_error() {
-  echo "Error: $1"
+  echo "Error: $1" >&2
 }
 
 exit_error() {
@@ -55,10 +55,10 @@ exit_info() {
 
 mysql_exec() {
   if [ -z "$1" ]; then
-    mysql -u$MYSQL_USER -p$MYSQL_PASSWD -h$MYSQL_HOST \
+    mysql -u$MYSQL_USER -h$MYSQL_HOST \
       -P$MYSQL_PORT $MYSQL_OPTS
   else
-    echo "$@" | mysql -u$MYSQL_USER -p$MYSQL_PASSWD -h$MYSQL_HOST \
+    echo "$@" | mysql -u$MYSQL_USER -h$MYSQL_HOST \
       -P$MYSQL_PORT $MYSQL_OPTS
   fi
 }
@@ -67,10 +67,10 @@ mysql_exec_db() {
   [ -z "$1" ] && exit_error "No database for $FUNCNAME"
 
   if [ -z "$2" ]; then
-    mysql -u$MYSQL_USER -p$MYSQL_PASSWD -h$MYSQL_HOST \
+    mysql -u$MYSQL_USER -h$MYSQL_HOST \
       -P$MYSQL_PORT -D$1 $MYSQL_OPTS
   else
-    echo "${@:2}" | mysql -u$MYSQL_USER -p$MYSQL_PASSWD -h$MYSQL_HOST \
+    echo "${@:2}" | mysql -u$MYSQL_USER -h$MYSQL_HOST \
       -P$MYSQL_PORT -D$1 $MYSQL_OPTS
   fi
 }
@@ -175,6 +175,12 @@ dispatch_command() {
   fi
 }
 
+# flush privileges
+flush_privileges() {
+  SQL="FLUSH PRIVILEGES;"
+  mysql_exec "$SQL" || exit_error "Could not flush privileges"
+}
+
 #
 # general functions
 #
@@ -207,6 +213,9 @@ load_config() {
   # load system-wide config
   if [ -e "$SYSTEM_CONFIG" ]; then
     source $SYSTEM_CONFIG 2>/dev/null; RET=$?
+    # export MYSQL_PWD env variable
+    # http://dev.mysql.com/doc/refman/5.5/en/password-security-user.html
+    export MYSQL_PWD="$MYSQL_PASSWD"
   fi
 
   # load config from home directory
@@ -228,32 +237,38 @@ show_help() {
   echo "Run specific command with -h parameter to get help. Command abbreviations"
   echo "accepted."
   echo
+  echo "Available options:"
+  echo "  -h          Show help"
+  echo "  -q          Suppress all informational messages (useful in scripts)"
+  echo "  -v          Show version"
+  echo "  -y          Answer 'y' to all questions"
+  echo
   echo "Available commands:"
-  echo " db          Manage and list databases"
-  echo " privilege   Manage user privileges to database"
-  echo " shell       Get MySQL shell or execute SQL statement"
-  echo " user        Manage and list users"
+  echo "  db          Manage and list databases"
+  echo "  privilege   Manage user privileges to database"
+  echo "  shell       Get MySQL shell or execute SQL statement"
+  echo "  user        Manage and list users"
   echo
   echo "Available installation commands"
-  echo " install     Install $TOOLNAME tool for current user or system-wide"
-  echo " uninstall   Uninstall $TOOLNAME tool"
+  echo "  install     Install $TOOLNAME tool for current user or system-wide"
+  echo "  uninstall   Uninstall $TOOLNAME tool"
   echo
   echo "Configuration file:"
-  echo " The configuration file provides basic configuration for $TOOLNAME tool."
-  echo " Global configuration file is located at \`$SYSTEM_CONFIG'. This can be"
-  echo " overriden by local configuration file \`$USER_CONFIG'. Configuration"
-  echo " file contains bash varibles sourced by the tool. The configuration file"
-  echo " can be created manually or running the 'install' command."
+  echo "  The configuration file provides basic configuration for $TOOLNAME tool."
+  echo "  Global configuration file is located at \`$SYSTEM_CONFIG'. This can be"
+  echo "  overriden by local configuration file \`$USER_CONFIG'. Configuration"
+  echo "  file contains bash varibles sourced by the tool. The configuration file"
+  echo "  can be created manually or running the 'install' command."
   echo
-  echo " Mandatory variables:"
-  echo "  MYSQL_USER      - MySQL administrator username" 
-  echo "  MYSQL_PASSWD    - MySQL administrator password" 
+  echo "  Mandatory variables:"
+  echo "    MYSQL_USER      - MySQL administrator username" 
+  echo "    MYSQL_PASSWD    - MySQL administrator password" 
   echo
-  echo " Optional variables:"
-  echo "  MYSQL_HOST      - MySQL hostname (default: localhost)" 
-  echo "  MYSQL_PORT      - MySQL port (default: 3309)" 
-  echo "  DEF_HOST        - Default host for adding user (default: localhost)"
-  echo "  DEF_PASSWD      - Default password for added user (ask user if not present)"
+  echo "  Optional variables:"
+  echo "    MYSQL_HOST      - MySQL hostname (default: localhost)" 
+  echo "    MYSQL_PORT      - MySQL port (default: 3309)" 
+  echo "    DEF_HOST        - Default host for adding user (default: localhost)"
+  echo "    DEF_PASSWD      - Default password for added user (ask user if not present)"
   echo
   exit 0
 }
@@ -417,7 +432,7 @@ myctlsubcmd_user_del() {
   # remove given databases
   if [ -n "$DBS" ]; then
     for DB in $(sed 's/,/ /g' <<< "$DBS"); do
-      mysql_exec "DROP DATABASE $DB" || print_error "Could not remove database $DB"
+      mysql_exec "DROP DATABASE \`$DB\`" || print_error "Could not remove database $DB"
       print_info "Removed database '$DB'"
     done
   fi
@@ -425,7 +440,7 @@ myctlsubcmd_user_del() {
   # remove all databases
   if [ -n "$DALL" ]; then
     for DB in $(myctlsubcmd_user_list | grep "$UNAME@$HOST" | cut -d\  -f 2-); do
-      mysql_exec "DROP DATABASE $DB" || print_error "Could not remove database $DB"
+      mysql_exec "DROP DATABASE \`$DB\`" || print_error "Could not remove database $DB"
       print_info "Removed database '$DB'"
     done
   fi
@@ -505,10 +520,12 @@ myctlsubcmd_user_list() {
   fi
 
   {
-    printf "%-40s%s\n" "User@Server" "Privileges to database(s)"
-    printf "%80s\n" | tr ' ' -
+    if [ -z "$QUIET" ]; then
+      printf "%-40s%s\n" "User@Server" "Privileges to database(s)"
+      printf "%80s\n" | tr ' ' -
+    fi
     echo "$LIST"
-  } | less -FX
+  } | less -F
 }
 
 user_list_help() {
@@ -578,8 +595,10 @@ myctlsubcmd_db_list() {
   fi
 
   {
-    printf "%-40s%s\n" "Database" "Users with privileges"
-    printf "%80s\n" | tr ' ' -
+    [ -z "$QUIET" ] && {
+      printf "%-40s%s\n" "Database" "Users with privileges"
+      printf "%80s\n" | tr ' ' -
+    }
     for DB in $DBS; do
       PRIV=$(echo "$PRIVS" | egrep -- "^$DB " | awk '{print $2}')
       [ -z "$PRIV" ] && PRIV="-- none --"
@@ -595,7 +614,7 @@ myctlsubcmd_db_list() {
       done
       echo
     done
-  } | less -FX
+  } | less -F
 }
 
 db_list_help() {
@@ -643,7 +662,7 @@ myctlsubcmd_db_del() {
   confirm "Really remove MySQL database $DB"
 
   # remove database
-  command_shell "DROP DATABASE \`$DB\`"
+  mysql_exec "DROP DATABASE \`$DB\`"
   print_info "Database $DB removed"
 }
 
@@ -700,7 +719,7 @@ myctlsubcmd_db_add() {
   fi
 
   # add user
-  SQL="CREATE DATABASE $DB"
+  SQL="CREATE DATABASE \`$DB\`"
   mysql_exec "$SQL" || exit_error "Creating database"
   print_info "Created database '$DB'"
 
@@ -709,11 +728,14 @@ myctlsubcmd_db_add() {
     for USR in $USRS; do
       echo $USR | egrep -q -- ".+@.+" || USR="$USR@$DEF_HOST"
       IFS=@ read UNAME HOST <<< "$USR"
-      SQL="GRANT ALL ON $DB.* TO '$UNAME'@'$HOST';"
+      SQL="GRANT ALL ON \`$DB\`.* TO '$UNAME'@'$HOST';"
       mysql_exec "$SQL" || exit_error "Granting all privileges to database '$DB'"
       print_info "Granted all privileges for '$USR' to '$DB'"
     done
   fi
+
+  # flush privileges
+  flush_privileges
 
   # restore dump from given file
   [ -n "$DUMP" ] && myctlsubcmd_db_restore $DB $DUMP
@@ -768,7 +790,7 @@ myctlsubcmd_db_restore() {
 
   # truncate database if requested, do no ask confirmation
   if [ -n "$REMOVE" ]; then
-    mysql_exec <<< "DROP DATABASE $DB; CREATE DATABASE $DB" || \
+    mysql_exec <<< "DROP DATABASE \`$DB\`; CREATE DATABASE \`$DB\`" || \
       exit_error "Failed to remove database contents"
     print_info "Removed database '$DB' contents"
   fi
@@ -780,7 +802,7 @@ myctlsubcmd_db_restore() {
     gzip*) gunzip < $DUMP ;;
     zip*) unzip -p $DUMP ;;
     *) cat $DUMP ;;
-  esac | mysql -u$MYSQL_USER -p$MYSQL_PASSWD -h$MYSQL_HOST $DB || \
+  esac | mysql -u$MYSQL_USER -h$MYSQL_HOST $DB || \
     exit_error "Restoring dump $DUMP to $DB failed"
 
   # success :)
@@ -838,12 +860,12 @@ myctlsubcmd_db_dump() {
 
   # check if dump exists or create a new filename
   if [ -n "$DUMP" ]; then
-    [ -e "$DUMP" ] && exit_error "Dump file already exists"
+    [ -e "$DUMP" ] && exit_error "Dump file '$DUMP' already exists"
   else
     DUMP="$DB-$(date +%Y%m%d_%H-%M).$SUFFIX"
   fi
 
-  mysqldump -u$MYSQL_USER -p$MYSQL_PASSWD -h$MYSQL_HOST $DB | \
+  mysqldump -u$MYSQL_USER -h$MYSQL_HOST $DB | \
     $COMPRESS > $DUMP || exit_error "Dumping database '$DB' failed"
 
   # success :)
@@ -924,7 +946,7 @@ myctlsubcmd_privilege_grant() {
     # check if db exitst
     check_db "$DB" || exit_error "Database $DB does not exist"
     # grant privilege for given db
-    SQL="GRANT ALL ON $DB.* TO '$UNAME'@'$HOST';"
+    SQL="GRANT ALL ON \`$DB\`.* TO '$UNAME'@'$HOST';"
     mysql_exec "$SQL" || exit_error "Granting all privileges to database '$DB'"
     print_info "Granted user '$UNAME@$HOST' all privileges to database '$DB'"
   else
@@ -935,6 +957,9 @@ myctlsubcmd_privilege_grant() {
     mysql_exec "$SQL" || exit_error "Granting all privileges to all databases for $UNAME@$HOST"
     print_info "Granted user '$UNAME@$HOST' all privileges to all databases"
   fi
+
+  # flush all privileges
+  flush_privileges
 }
 
 privilege_grant_help() {
@@ -985,7 +1010,7 @@ myctlsubcmd_privilege_revoke() {
     check_user_db "$UNAME@$HOST" "$DB" || exit_error \
       "User '$UNAME@$HOST' has no privileges to database '$DB'"
     # grant privilege for given db
-    SQL="REVOKE ALL ON $DB.* FROM '$UNAME'@'$HOST';"
+    SQL="REVOKE ALL ON \`$DB.*\` FROM '$UNAME'@'$HOST';"
     mysql_exec "$SQL" || exit_error "Revoking all privileges from database '$DB'"
     print_info "Revoked all privileges from user '$UNAME@$HOST' to database '$DB'"
   else
@@ -999,6 +1024,9 @@ myctlsubcmd_privilege_revoke() {
     mysql_exec "$SQL" || exit_error "Revoking all privileges to all databases for $UNAME@$HOST"
     print_info "Revoked all privileges from user '$UNAME@$HOST' to all databases"
   fi
+
+  # flush all privileges
+  flush_privileges
 }
 
 privilege_revoke_help() {
@@ -1089,8 +1117,6 @@ install_get_env() {
   while [ $RET -ne 0 ]; do
     MYSQL_USER=$(ask_user "Enter MySQL admin username")
     MYSQL_PASSWD=$(ask_user "Enter MySQL admin password")
-    MYSQL_HOST=$(ask_user "MySQL host" "localhost")
-    MYSQL_PORT=$(ask_user "MySQL port" "3306")
     mysql_exec "exit" >/dev/null; RET=$?
     if [ $RET -eq 0 ]; then
       # TODO check if user admin
@@ -1100,6 +1126,8 @@ install_get_env() {
     fi
   done
 
+  MYSQL_HOST=$(ask_user "MySQL host" "localhost")
+  MYSQL_PORT=$(ask_user "MySQL port" "3306")
   DEF_HOST=$(ask_user "Default host for new user" "localhost")
   DEF_PASSWD=$(ask_user "Default password for new user" "ask for password")
   [ "$DEF_PASSWD" == "ask for password" ] && DEF_PASSWD=
@@ -1290,11 +1318,14 @@ myctlcmd_uninstall() {
 # Main
 #
 
-while getopts "hyv" OPTION
+while getopts "hqyv" OPTION
 do
   case $OPTION in
     h)
         show_help
+        ;;
+    q)
+        QUIET=yes
         ;;
     y)
         CONFIRM=yes
@@ -1322,7 +1353,7 @@ load_config
 # shift away command
 shift 1
 
-# execute give command specific function
+# execute command specific function
 GEN=$(compgen -A function myctlcmd_$COMMAND)
 if [ -n "$GEN" ]; then
   if [ $(wc -l <<< "$GEN") -gt 1 ]; then
