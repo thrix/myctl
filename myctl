@@ -266,7 +266,7 @@ show_help() {
   echo
   echo "  Optional variables:"
   echo "    MYSQL_HOST      - MySQL hostname (default: localhost)" 
-  echo "    MYSQL_PORT      - MySQL port (default: 3309)" 
+  echo "    MYSQL_PORT      - MySQL port (default: 3306)" 
   echo "    DEF_HOST        - Default host for adding user (default: localhost)"
   echo "    DEF_PASSWD      - Default password for added user (ask user if not present)"
   echo
