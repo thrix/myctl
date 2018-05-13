@@ -24,7 +24,8 @@ USER_CONFIG="$HOME/.$TOOLNAME.conf"
 # defaults
 MYSQL_HOST="localhost"
 MYSQL_PORT="3306"
-DEF_HOST="localhost"
+DEF_HOST="rocky.altamira.sk"
+DEFAULT_COLLATE="utf8-general-ci"
 MYSQL_OPTS="--skip-column-names" # by default do not show column names
 [ -e "$SYSTEM_CONFIG" ] && MYCTL_GROUP="$(stat -c '%G' $SYSTEM_CONFIG)" || \
   MYCTL_GROUP="myctl"
@@ -779,6 +780,7 @@ myctlsubcmd_db_restore() {
   # get positional params
   local DB=$1
   local DUMP=$2
+  local DUMPFILE=$(mktemp)
 
   # check if DB exists
   [ -z "$DB" ] && exit_error "No database given" db_restore_help
@@ -802,10 +804,14 @@ myctlsubcmd_db_restore() {
     gzip*) gunzip < $DUMP ;;
     zip*) unzip -p $DUMP ;;
     *) cat $DUMP ;;
-  esac | mysql -u$MYSQL_USER -h$MYSQL_HOST $DB || \
-    exit_error "Restoring dump $DUMP to $DB failed"
+  esac > $DUMPFILE
+ 
+  # https://makandracards.com/makandra/595-dumping-and-importing-from-to-mysql-in-an-utf-8-safe-way 
+  mysql_exec_db $DB "SET NAMES 'utf8' COLLATE '$DEFAULT_COLLATE'; SOURCE $DUMPFILE;" || \
+    { rm $DUMPFILE; exit_error "Restoring dump $DUMP to $DB failed"; }
 
   # success :)
+  rm $DUMPFILE
   print_info "Restored MySQL dump '$DUMP' to database '$DB'"
 }
 
