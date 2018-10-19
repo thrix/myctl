@@ -1123,7 +1123,7 @@ install_get_env() {
   while [ $RET -ne 0 ]; do
     MYSQL_USER=$(ask_user "Enter MySQL admin username")
     MYSQL_PASSWD=$(ask_user "Enter MySQL admin password")
-    mysql_exec "exit" >/dev/null; RET=$?
+    MYSQL_PWD=$MYSQL_PASSWD mysql_exec "exit" >/dev/null; RET=$?
     if [ $RET -eq 0 ]; then
       # TODO check if user admin
       break
